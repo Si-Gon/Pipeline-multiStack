@@ -52,7 +52,80 @@ al proyecto, no al script).
 |---|---|
 | `--resume` | Retoma una corrida anterior. Conserva `.opencode-context.md` y salta agentes que ya tienen marker |
 | `--objective-file <path>` | Lee el objetivo desde un archivo (ruta relativa al proyecto). Usa `-` para stdin |
+| `--budget-inject <N>` | Límite máximo de tokens para el contexto inyectado por agente (default `9000`). `0` desactiva el recorte |
+| `--mcp-minimal` | Re-aplica el config MCP-minimal del proyecto (deshabilita MCP globales para ahorrar tokens) |
+| `--no-mcp-minimal` | Omite la generación automática del config MCP-minimal |
 | `--help` | Muestra la ayuda completa |
+
+## Presupuesto de contexto (--budget-inject)
+
+Red de seguridad para el bloque `CONTEXTO INYECTADO` que recibe cada agente.
+**Default `9000` tokens**, medido sobre proyectos reales (ruteo-mvp ~6.5K, SmallBooks
+~5.7K): está cómodamente por encima de lo normal, por lo que **NO recorta tu flujo
+típico** — solo actúa si el inyectado crece sin control (resume de specs largas,
+contexto acumulado).
+
+Cuando excede el presupuesto, recorta de forma determinista y **priorizada**:
+conserva íntegro el bloque del agente anterior (el más relevante) y resume los
+más antiguos, marcando `[... CONTEXTO RECORTADO POR PRESUPUESTO ...]` si aún
+no baja del tope.
+
+```powershell
+# Uso explícito (limitar agresivamente a 500 tok)
+python run_agents_v2.py C:\WorkSpace\mi-proyecto "objetivo" --budget-inject 500
+
+# Desactivar el recorte por completo
+python run_agents_v2.py C:\WorkSpace\mi-proyecto "objetivo" --budget-inject 0
+```
+
+## Reporte de costo estimado
+
+Al final de cada corrida, el pipeline imprime una **factura estimada en USD por
+modelo** (entrada/salida), usando los precios de `MODEL_PRICING`:
+
+```
+[COSTO ESTIMADO] por modelo (USD):
+  opencode-go/deepseek-v4-flash  in~ 5000 out~ 2000 → $0.0033
+  opencode-go/qwen3.7-plus       in~12000 out~ 3000 → $0.0216
+  TOTAL                                             → $0.0249
+```
+
+> Es una **estimación** basada en `est_tokens()` (~4 chars/token); opencode no
+> expone recuento de tokens por API en este flujo. Útil para comparar corridas,
+> no para contabilidad exacta.
+
+Los precios por millón de tokens se configuran en `MODEL_PRICING` al inicio del
+script (override por env: `OC_PRICE_IN_<MODELO>`, `OC_PRICE_OUT_<MODELO>`).
+
+## Exit codes por fase y pipeline-status.json
+
+Cada fase fallida devuelve un **código de salida distinto** para que un wrapper
+relance directo al paso que falló:
+
+| Exit code | Fase que falló |
+|---|---|
+| 2 | explorer |
+| 3 | coder |
+| 4 | tester |
+| 5 | debugger |
+| 6 | sdd-updater |
+| 0 | éxito completo |
+
+Además escribe `pipeline-status.json` en la raíz del proyecto con el último paso
+completado, la fase que falló, el log y el timestamp. Ejemplo:
+
+```json
+{
+  "last_completed_step": "coder",
+  "failed_step": "explorer",
+  "status": "failed",
+  "log": "pipeline-20260823-153000.log",
+  "timestamp": "2026-08-23T15:30:00"
+}
+```
+
+Un wrapper puede leer el `failed_step` y relanzar con `--resume` **directo desde
+esa fase**, en vez de reinventar a qué paso relanzar.
 
 ## Ejemplos por stack
 
@@ -128,6 +201,19 @@ python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\RPG-Frontend --o
 
 `--resume` conserva `.opencode-context.md` existente y salta los agentes
 que ya tienen su marker `<!-- AGENT_DONE: <agente> -->`.
+
+### Saber en qué agente falló
+
+Cada corrida escribe `pipeline-status.json` en la raíz del proyecto (mejora 4):
+
+```powershell
+# Ver la fase que falló y el log asociado
+Get-Content "C:\WorkSpace\RPG-Frontend\pipeline-status.json"
+```
+
+Y el **exit code** del script indica la fase (2=explorer, 3=coder, 4=tester,
+5=debugger, 6=sdd-updater). Un wrapper puede leer `failed_step` y relanzar con
+`--resume` directo desde esa fase en vez de adivinar.
 
 ## Pipeline completo: flujo
 
@@ -213,6 +299,15 @@ $env:OPENCODE_BIN = "opencode"
 python ~/scripts/run_agents_v2.py ~/proyecto "objetivo"
 ```
 
+### Variables de entorno soportadas
+
+| Env var | Efecto |
+|---|---|
+| `OPENCODE_BIN` | Binario de opencode a usar (`.exe` directo en Windows, `opencode` en Unix) |
+| `OPENCODE_AGENTS_DIR` | Directorio de agentes `.md` especializados (default `~/.config/opencode/agents`) |
+| `OC_AGENT_TIMEOUT_<AGENTE>` | Timeout por agente en segundos (ej. `OC_AGENT_TIMEOUT_CODER=3600`) |
+| `OC_PRICE_IN_<MODELO>` / `OC_PRICE_OUT_<MODELO>` | Override del precio por M tokens para el reporte de costo (mejora 3) |
+
 ## Troubleshooting
 
 ### "El agente no escribió su marker"
@@ -262,3 +357,10 @@ Fallo de encoding al pasar el objetivo como arg en PowerShell. Usa `--objective-
 | 2026-07-25 | PAUD-008: Caché persistente Playwright en `~/.opencode/playwright-cache/` |
 | 2026-07-25 | Timeout por agente (coder=2400s) + override vía env vars |
 | 2026-07-25 | Agentes parchados con regla "JAMÁS escribir markers de otros agentes" |
+| 2026-08-07 | PAUD-206: objetivo largo a archivo adjunto con `-f <archivo>` (WinError 206 argv) |
+| 2026-08-07 | PAUD-002: timeout por agente (coder=40min default) + override env `OC_AGENT_TIMEOUT_*` |
+| 2026-08-07 | `--mcp-minimal` / `--no-mcp-minimal`: config MCP-minimal por proyecto (ahorro tokens) |
+| 2026-08-07 | P10-P15: `--objective-file`, prioridad de contexto, resumen de bloques (P15) |
+| 2026-08-23 | Budget de contexto `--budget-inject` (red de seguridad, default 9000) |
+| 2026-08-23 | Reporte de costo estimado en USD por modelo al final de la corrida |
+| 2026-08-23 | Exit codes por fase + `pipeline-status.json` para resume granular |

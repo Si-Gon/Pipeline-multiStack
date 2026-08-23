@@ -97,6 +97,44 @@ AGENT_MODELS = {
     "sdd-updater": MODEL_FAST,
 }
 
+# ─── BUDGET DE CONTEXTO INYECTADO (mejora 2) ──────────────────────────────
+# Presupuesto máximo de tokens para el bloque "CONTEXTO INYECTADO" por agente.
+# Es una RED DE SEGURIDAD. Default = ~9K, medido sobre los repos reales de
+# Silvio: el contexto inyectado de coder en ruteo-mvp pesa ~6.5K tok y en
+# SmallBooks ~5.7K. 9K está COMFORTABLEMENTE por encima de lo normal → NO recorta
+# tu flujo típico; solo actúa si el inyectado crece sin control (resume de specs
+# largas/contexto acumulado). Configurable por CLI: --budget-inject N
+DEFAULT_CONTEXT_BUDGET_TOKENS = 9000
+# Cuando se recorta, cuántas líneas usar para los resúmenes de bloques viejos.
+BUDGET_EVICT_MAX_LINES = 8
+
+# ─── PRECIOS DE MODELO (mejora 3) ──────────────────────────────────────────
+# Costo estimado por millón de tokens (USD), entrada/salida. Son estimaciones
+# razonables de los modelos opencode-go/deepseek/qwen/kimi; se pueden override
+# con env vars: OC_PRICE_IN_<NOMBRE>=X.X, OC_PRICE_OUT_<NOMBRE>=X.X  (por M tok)
+# Los precios se usan SOLO para reportar la factura estimada de la corrida.
+MODEL_PRICING = {
+    # (in $/M tok, out $/M tok)
+    MODEL_FAST:   (0.25, 1.00),   # deepseek-v4-flash (económico)
+    MODEL_CODING: (1.20, 2.40),   # qwen3.7-plus
+    MODEL_DEBUG:  (1.00, 2.00),   # kimi-k2.7-code
+    MODEL_LOCAL:  (0.00, 0.00),   # ollama local — gratis
+}
+# Fallback para cualquier modelo no listado.
+DEFAULT_PRICING = (0.50, 1.50)
+
+# ─── EXIT CODES POR FASE (mejora 4) ────────────────────────────────────────
+# 0 = éxito completo. Cada fase fallida devuelve un código distinto para que un
+# wrapper pueda relanzar DIRECTAMENTE al paso que falló (resume granular).
+PHASE_EXIT_CODES = {
+    "explorer":    2,
+    "coder":       3,
+    "tester":      4,
+    "debugger":    5,
+    "sdd-updater": 6,
+}
+STATUS_FILE = "pipeline-status.json"
+
 # ─── CONSTANTES DEL SISTEMA ───────────────────────────────────────────────────
 # IMPORTANTE (Windows): usar el .exe directo del wrapper opencode.cmd para
 # evitar el rc=1 spurio que genera el .cmd por imprimir logs ANSI en stderr.
@@ -185,10 +223,11 @@ def resolve_agent(role: str, stack_runner: str) -> str:
 
 # Formato del bloque que recibe el agente.
 CONTEXT_PRIORITY_HEADER = (
-    "[PRIORIDAD DE CONTEXTO]: Ya existe arquitectura mapeada en "
-    ".opencode-context.md de una corrida previa de este pipeline. Léelo "
-    "primero y continúa/extiende lo ya implementado — no repartas la "
-    "especificación desde cero ignorando lo que ya está construido."
+    "[PRIORIDAD DE CONTEXTO]: El contexto relevante de corridas previas viene "
+    "inyectado en este mensaje bajo 'CONTEXTO INYECTADO'. Úsalo para continuar/"
+    "extender lo ya implementado — no repartas la especificación desde cero. "
+    "NO leas .opencode-context.md completo salvo que necesites verificar algo "
+    "puntual: el contexto inyectado ya contiene lo que necesitas."
 )
 
 OBJECTIVE_BLOCK_TEMPLATE = (
@@ -197,6 +236,7 @@ OBJECTIVE_BLOCK_TEMPLATE = (
     "=== OBJETIVO DEL USUARIO ===\n"
     "{objective}\n"
     "=== FIN OBJETIVO ===\n"
+    "{injected_context}\n"
     "\n"
     "[INSTRUCCION OBLIGATORIA DE CIERRE]: Al final de tu trabajo, AGREGA al "
     "final de `.opencode-context.md` una seccion con tu nombre de agente y, "
@@ -233,6 +273,14 @@ class PipelineLogger:
 
         self.log(f"Logger inicializado en {self.log_path}")
 
+        # ── Contador de costo estimado (mejora 3) ────────────────────────
+        # Acumula por modelo: {model: [in_tok, out_tok]}. El costo real no se
+        # mide (opencode no expone tokens por API en este flujo); se ESTIMA a
+        # partir del objetivo enviado (input) y del output coleccionado. Es una
+        # factura aproximada con MODEL_PRICING, configurable por env.
+        self._cost = {}
+        self._cost_lock = threading.Lock()
+
     def log(self, msg: str, level: int = logging.INFO):
         print(f"  [{logging.getLevelName(level)}] {msg}")
         self.logger.log(level, msg)
@@ -255,6 +303,38 @@ class PipelineLogger:
 
     def debug(self, msg: str):
         self.log(msg, logging.DEBUG)
+
+    # ── Contador de costo estimado (mejora 3) ─────────────────────────────
+    def add_cost(self, model: str, in_tok: int, out_tok: int):
+        """Acumula tokens estimados (in/out) por modelo para la factura."""
+        if not model:
+            return
+        with self._cost_lock:
+            cur = self._cost.setdefault(model, [0, 0])
+            cur[0] += max(0, int(in_tok))
+            cur[1] += max(0, int(out_tok))
+
+    def cost_report(self) -> str:
+        """Resumen monoespaciado del costo ESTIMADO por modelo (USD)."""
+        with self._cost_lock:
+            if not self._cost:
+                return "[COSTO] sin actividad medible."
+        lines = ["[COSTO ESTIMADO] por modelo (USD):"]
+        total = 0.0
+        for model, (intok, outtok) in sorted(self._cost.items()):
+            p_in, p_out = MODEL_PRICING.get(model, DEFAULT_PRICING)
+            cost = (intok / 1e6) * p_in + (outtok / 1e6) * p_out
+            total += cost
+            lines.append(
+                f"  {model:42} in~{intok:6} out~{outtok:6} → ${cost:.4f}"
+            )
+        lines.append(f"  {'TOTAL':42}        → ${total:.4f}")
+        return "\n".join(lines)
+
+    def log_cost_report(self):
+        rep = self.cost_report()
+        self.logger.info(rep.replace("[COSTO ESTIMADO]", "COSTO ESTIMADO"))
+        print(rep)
 
 
 # ─── BACKUP DE CONTEXTO (P7) ──────────────────────────────────────────────────
@@ -305,7 +385,7 @@ def has_section(project_path: str, marker: str) -> bool:
     if not os.path.exists(ctx):
         return False
     try:
-        with open(ctx, encoding="utf-8") as f:
+        with open(ctx, encoding="utf-8", errors="replace") as f:
             return marker in f.read()
     except OSError:
         return False
@@ -355,7 +435,7 @@ def strip_foreign_markers(current_agent: str, project_path: str,
         idx_current = PIPELINE_ORDER.index(current_agent)
     except ValueError:
         return
-    text = Path(ctx).read_text(encoding="utf-8")
+    text = Path(ctx).read_text(encoding="utf-8", errors="replace")
     changed = False
     for agent in PIPELINE_ORDER[idx_current + 1:]:
         if agent in trusted_initial:
@@ -676,16 +756,184 @@ def _run_playwright_headless(project_path: str, logger: PipelineLogger) -> tuple
 
 
 # ─── CONSTRUCCIÓN DEL OBJETIVO DEL AGENTE (P9) ────────────────────────────────
-def build_agent_objective(project_path: str, agent: str, objective: str) -> str:
+# P14: Lectura por INYECCIÓN en vez de lectura completa del contexto.
+# .opencode-context.md crece con cada agente; leerlo entero en cada paso
+# dispara el consumo de tokens y lentifica la interpretación inicial. Ahora
+# el orquestador parsea los bloques por agente (delimitados por sus markers
+# AGENT_DONE) e inyecta SOLO los relevantes en el mensaje del agente.
+# P15: COMPACCIÓN — el bloque del agente inmediatamente anterior se inyecta
+# COMPLETO (es la información accionable: mensaje para ti + estado actual),
+# los bloques más antiguos se inyectan como RESUMEN EJECUTIVO determinista
+# (primeras balas + mensaje para el siguiente agente), sin llamadas LLM.
+CONTEXT_INJECTION_HEADER = (
+    "\n"
+    "--- CONTEXTO INYECTADO (secciones relevantes para ti) ---\n"
+    "{blocks}\n"
+    "--- FIN CONTEXTO INYECTADO ---\n"
+)
+
+# Qué bloques recibe cada agente: (full=[...], summary=[...]).
+# "all" = archivo completo (resume inicial / documentación final).
+AGENT_CONTEXT_BLOCKS = {
+    "explorer":    (["all"], []),             # primero: contexto previo completo (--resume)
+    "coder":       (["explorer"], []),        # explorer completo (contexto + "Para @coder")
+    "tester":      (["coder"], ["explorer"]), # coder completo + resumen del explorer
+    "debugger":    (["tester"], ["coder", "explorer"]),  # tester completo + resúmenes
+    "sdd-updater": (["all"], []),             # documenta la corrida completa
+}
+
+
+def parse_context_blocks(project_path: str) -> dict:
+    """Divide .opencode-context.md en bloques por agente usando los markers
+    AGENT_DONE como delimitadores. Devuelve {agent: texto_del_bloque} (solo
+    agentes que ya dejaron su marker). Vacío si no existe el archivo."""
+    ctx = os.path.join(project_path, CONTEXT_FILE)
+    if not os.path.exists(ctx):
+        return {}
+    with open(ctx, encoding="utf-8", errors="replace") as f:
+        content = f.read()
+    blocks, prev_end = {}, 0
+    for agent in PIPELINE_ORDER:
+        marker = AGENT_DONE_MARKER_TEMPLATE.format(agent=agent)
+        idx = content.find(marker, prev_end)
+        if idx == -1:
+            continue
+        end = idx + len(marker)
+        blocks[agent] = content[prev_end:end].strip()
+        prev_end = end
+    return blocks
+
+
+def summarize_block(agent: str, block: str, max_lines: int = 14) -> str:
+    """Resumen ejecutivo DETERMINISTA de un bloque (P15): conserva el
+    '## Mensaje para el siguiente agente' completo (información accionable)
+    + el cuerpo acotado a max_lines. Sin llamadas LLM: puro recorte textual."""
+    lines = block.splitlines()
+    msg_idx = None
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith("## Mensaje para el siguiente agente"):
+            msg_idx = i
+            break
+    if msg_idx is not None:
+        body = [ln for ln in lines[:msg_idx]
+                if not ln.strip().startswith("<!-- AGENT_DONE")]
+        msg = lines[msg_idx:]
+        return "\n".join(body[:max_lines - 6] + [""] + msg[:6]).strip()
+    return "\n".join(ln for ln in lines
+                     if not ln.strip().startswith("<!-- AGENT_DONE"))[:max_lines]
+
+
+def build_injected_context(project_path: str, agent: str) -> str:
+    """Devuelve el bloque 'CONTEXTO INYECTADO' para el agente (P14+P15):
+    bloques completos del agente anterior + resúmenes ejecutivos de los más
+    antiguos. Cadena vacía si no hay contexto previo."""
+    blocks = parse_context_blocks(project_path)
+    if not blocks:
+        return ""
+    full_list, summary_list = AGENT_CONTEXT_BLOCKS.get(agent, (["all"], []))
+    if full_list == ["all"]:
+        selected = "\n\n".join(blocks.values())
+    else:
+        parts = []
+        for a in full_list:
+            if a in blocks:
+                parts.append(blocks[a])
+        for a in summary_list:
+            if a in blocks:
+                parts.append(
+                    f"> [CONTEXTO COMPACTADO — resumen de @{a}]\n"
+                    + summarize_block(a, blocks[a])
+                )
+        selected = "\n\n".join(parts)
+    if not selected.strip():
+        return ""
+    return CONTEXT_INJECTION_HEADER.format(blocks=selected)
+
+
+def est_tokens(text: str) -> int:
+    """Estimación rápida de tokens: ~4 chars/token para mezcla código/texto.
+    Solo para métricas — no es un contador exacto."""
+    return max(0, len(text) // 4)
+
+
+def log_token_metrics(logger, agent: str, project_path: str, message: str) -> None:
+    """Loguea el consumo estimado de tokens del mensaje del agente y el
+    ahorro de la inyección compactada (P14/P15) vs el archivo completo."""
+    total = est_tokens(message)
+    injected = build_injected_context(project_path, agent)
+    inj = est_tokens(injected)
+    blocks = parse_context_blocks(project_path)
+    full = est_tokens("\n\n".join(blocks.values())) if blocks else 0
+    line = f"[TOKENS] @{agent}: mensaje ~{total} tok | contexto inyectado ~{inj} tok"
+    if full > 0:
+        saved = max(0, full - inj)
+        pct = 100 - (100 * inj // full) if full else 0
+        line += f" | sin compactar ~{full} tok → ahorro {saved} tok ({pct}%)"
+    logger.info(line)
+    print(line)
+
+
+def enforce_context_budget(project_path: str, agent: str, budget: int) -> str:
+    """Red de seguridad (mejora 2): si el contexto inyectado que recibiría el
+    agente supera `budget` tokens, lo recorta de forma determinista y PRIORIZADA:
+    conserva íntegro el bloque del agente anterior (el más relevante) y resume los
+    más antiguos a BUDGET_EVICT_MAX_LINES. Devuelve el contexto recortado (lista
+    para inyectar) o "" si no aplica. No modifica archivos: solo prepara el texto."""
+    blocks = parse_context_blocks(project_path)
+    if not blocks:
+        return ""
+    full_list, summary_list = AGENT_CONTEXT_BLOCKS.get(agent, (["all"], []))
+    if full_list == ["all"]:
+        selected = "\n\n".join(blocks.values())
+    else:
+        parts = []
+        for a in full_list:
+            if a in blocks:
+                parts.append(blocks[a])
+        for a in summary_list:
+            if a in blocks:
+                parts.append(
+                    f"> [CONTEXTO COMPACTADO — resumen de @{a}]\n"
+                    + summarize_block(a, blocks[a])
+                )
+        selected = "\n\n".join(parts)
+    cur = est_tokens(selected)
+    if cur <= budget:
+        return CONTEXT_INJECTION_HEADER.format(blocks=selected)
+
+    # Excede el presupuesto → recorte por prioridad.
+    # 1) Reduce los resúmenes de todos los bloques antiguos a fewer lines.
+    evict = []
+    for a in PIPELINE_ORDER:
+        if a not in blocks or a == agent:
+            continue
+        evict.append(
+            f"> [CONTEXTO COMPACTADO — resumen de @{a}]\n"
+            + summarize_block(a, blocks[a], max_lines=BUDGET_EVICT_MAX_LINES)
+        )
+    trimmed = "\n\n".join(evict) if evict else selected
+    # 2) Si aun así no baja del presupuesto, recorta por caracteres al tope.
+    if est_tokens(trimmed) > budget:
+        trimmed = trimmed[: budget * 4]
+        trimmed += "\n[... CONTEXTO RECORTADO POR PRESUPUESTO ...]"
+    return CONTEXT_INJECTION_HEADER.format(blocks=trimmed)
+
+
+def build_agent_objective(project_path: str, agent: str, objective: str,
+                          budget: int = 0) -> str:
     """Construye el prompt del agente: contexto primero, luego bloque de
-    objetivo del usuario, luego instrucción de cierre con el marker."""
+    objetivo del usuario, luego instrucción de cierre con el marker.
+    `budget`>0 aplica el recorte de contexto inyectado (mejora 2)."""
     ctx = os.path.join(project_path, CONTEXT_FILE)
     has_prior_context = os.path.exists(ctx) and has_section(project_path, "## Contexto del Proyecto")
     context_priority = CONTEXT_PRIORITY_HEADER if has_prior_context else ""
+    injected_context = (build_injected_context(project_path, agent) if budget <= 0
+                        else enforce_context_budget(project_path, agent, budget))
     agent_done_marker = AGENT_DONE_MARKER_TEMPLATE.format(agent=agent)
     return OBJECTIVE_BLOCK_TEMPLATE.format(
         context_priority=context_priority,
         objective=objective,
+        injected_context=injected_context,
         agent_done_marker=agent_done_marker,
     )
 
@@ -699,8 +947,22 @@ def run_agent(agent: str, project_path: str, objective: str, logger: PipelineLog
     print(f"\n{'─'*60}\n  > Lanzando {label} [{model}]\n{'─'*60}")
     logger.info(f"Lanzando {label} (model={model})")
 
+    # PAUD-206 (2026-08-07): WinError 206 con objetivos grandes — Windows limita
+    # argv a ~32K chars y el objetivo (spec + contexto inyectado) lo excede.
+    # Fix: escribir el objetivo COMPLETO a un archivo en pipeline-artifacts/
+    # (gitignoreado) y adjuntarlo con `opencode run ... -f <archivo>`.
+    obj_dir = os.path.join(project_path, "pipeline-artifacts")
+    os.makedirs(obj_dir, exist_ok=True)
+    obj_file = os.path.join(obj_dir, f"objetivo-{agent}-{int(time.time())}.md")
+    with open(obj_file, "w", encoding="utf-8") as _f:
+        _f.write(objective)
+
     cmd = [
-        OPENCODE_BIN, "run", objective,
+        OPENCODE_BIN, "run",
+        "Ejecuta EXACTAMENTE el objetivo completo del archivo adjunto (-f). "
+        "No lo resumas ni lo parafrasees: LEE el archivo y ejecuta todo lo que pide, "
+        "incluido el contexto inyectado. Trabaja directamente sobre el proyecto.",
+        "-f", obj_file,
         "--agent", invoke_as,
         "--model", model,
         "--auto",
@@ -762,6 +1024,11 @@ def run_agent(agent: str, project_path: str, objective: str, logger: PipelineLog
             full_output = "".join(collected_lines)
 
         logger.info(f"@{agent} returncode={proc.returncode}")
+
+        # Mejora 3: registrar costo ESTIMADO (input = objetivo enviado, output =
+        # texto coleccionado). Aproximado; opencode no expone tokens por API.
+        logger.add_cost(model, est_tokens(objective), est_tokens(full_output))
+
         if proc.returncode != 0:
             # Snippet para diagnóstico del log: últimas 1200 chars.
             snippet = full_output[-1200:]
@@ -837,11 +1104,67 @@ def run_agent_with_verification(agent: str, project_path: str, objective: str,
     return False
 
 
+# ─── MCP MINIMAL (ahorro de tokens por request) ───────────────────────────────
+# Los tool schemas de los MCP globales (context7, mdn, playwright, etc.) se
+# inyectan en CADA request del agente: miles de tokens de prompt por request.
+# --mcp-minimal genera <proyecto>/.opencode/opencode.json deshabilitándolos
+# todos (idempotente; respeta un config de proyecto ya existente).
+def apply_mcp_minimal(project_path: str, logger: PipelineLogger) -> None:
+    """Genera/actualiza <proyecto>/.opencode/opencode.json con los MCP
+    globales deshabilitados POR DEFECTO (minimal), RESPETANDO las decisiones
+    explícitas del proyecto: si un MCP ya está configurado en el config del
+    proyecto (ej. "second-brain": {"enabled": true}), se conserva tal cual —
+    nunca se resetea a false. Solo los MCP sin configuración explícita pasan
+    a enabled:false. Es idempotente: re-aplicarlo no toca lo ya decidido."""
+    global_cfg = os.path.join(os.path.expanduser("~"), ".config", "opencode", "opencode.json")
+    if not os.path.exists(global_cfg):
+        logger.warn("No existe opencode.json global — no se puede aplicar --mcp-minimal.")
+        return
+    try:
+        with open(global_cfg, encoding="utf-8") as f:
+            g = json.load(f)
+    except Exception as e:
+        logger.warn(f"opencode.json global inválido ({e}) — no se puede aplicar --mcp-minimal.")
+        return
+    mcp = g.get("mcp") or {}
+    proj_dir = os.path.join(project_path, ".opencode")
+    os.makedirs(proj_dir, exist_ok=True)
+    proj_cfg_path = os.path.join(proj_dir, "opencode.json")
+    existing = {}
+    if os.path.exists(proj_cfg_path):
+        try:
+            with open(proj_cfg_path, encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+    # MERGE: las decisiones explícitas del proyecto ganan; el resto -> off
+    existing_mcp = existing.get("mcp") or {}
+    merged = dict(existing_mcp)
+    for name in mcp:
+        if name not in existing_mcp:
+            merged[name] = {"enabled": False}
+    existing["mcp"] = merged
+    with open(proj_cfg_path, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2, ensure_ascii=False)
+    disabled = sorted(n for n in mcp if n not in existing_mcp)
+    preserved = sorted(n for n in mcp if n in existing_mcp)
+    msg = (f"[MCP-MINIMAL] {len(disabled)} MCP deshabilitados, "
+           f"{len(preserved)} conservados tal cual (decisiones del proyecto): {preserved}")
+    logger.info(f"{msg} — {proj_cfg_path}")
+    print(msg)
+
+
 # ─── FLUJO PRINCIPAL ───────────────────────────────────────────────────────────
-def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger = None):
+def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger = None,
+        mcp_minimal: bool = False, no_mcp_minimal: bool = False,
+        budget: int = DEFAULT_CONTEXT_BUDGET_TOKENS):
     """Ejecuta el pipeline. Si `logger` es None, crea uno nuevo (uso
     standalone). Si se pasa (uso desde `__main__` con atexit), lo reusa
-    para que el handler de atexit tenga referencia al mismo archivo."""
+    para que el handler de atexit tenga referencia al mismo archivo.
+    MCP minimal AUTOMÁTICO: si el proyecto no tiene `.opencode/opencode.json`,
+    se genera uno deshabilitando todos los MCP globales (los schemas de MCP
+    se inyectan en cada request del agente). `--mcp-minimal` fuerza la
+    regeneración; `--no-mcp-minimal` salta la generación automática."""
     abs_path = os.path.abspath(project_path)
     if not os.path.exists(abs_path):
         print(f"[ERROR] La ruta no existe: {abs_path}")
@@ -863,6 +1186,17 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
     stack = detect_stack(abs_path)
     logger.info(f"Stack inicial: {stack}")
 
+    # MCP minimal: deshabilitar MCP globales para este proyecto (ahorro de tokens).
+    # Automático en la primera corrida (proyecto sin .opencode/opencode.json);
+    # --mcp-minimal fuerza regeneración; --no-mcp-minimal lo salta.
+    proj_cfg_path = os.path.join(abs_path, ".opencode", "opencode.json")
+    auto_mcp = not os.path.exists(proj_cfg_path)
+    if mcp_minimal or (auto_mcp and not no_mcp_minimal):
+        apply_mcp_minimal(abs_path, logger)
+    elif auto_mcp and no_mcp_minimal:
+        logger.info("[MCP-MINIMAL] omitido por --no-mcp-minimal (proyecto sin config).")
+        print("[MCP-MINIMAL] omitido por --no-mcp-minimal.")
+
     # P13: snapshot de markers legítimos que YA existían antes de esta corrida
     # (válidos para --resume). Cualquier marker de un agente futuro que
     # aparezca DESPUÉS de este punto y no esté en este set se considera
@@ -878,6 +1212,7 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
         if agent_done(agent, abs_path):
             logger.info(f"@{agent} ya marcó done en contexto — saltando.")
             return True
+        log_token_metrics(logger, agent, abs_path, obj)
         invoke_as = resolve_agent(agent, stack["runner"])
         ok = run_agent_with_verification(agent, abs_path, obj, logger, invoke_as=invoke_as)
         if ok:
@@ -885,24 +1220,30 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
         return ok
 
     # 1. Explorer
-    if not step("explorer", build_agent_objective(abs_path, "explorer", objective), "explorer"):
+    if not step("explorer", build_agent_objective(abs_path, "explorer", objective, budget=budget), "explorer"):
         logger.error("explorer", "No pudo completarse la fase de exploración.")
         print("\n[ABORTADO] @explorer falló. Revisa el log del pipeline.")
-        sys.exit(1)
+        _write_status(abs_path, last_step="", status="failed",
+                      failed="explorer", log_path=logger.log_path)
+        sys.exit(PHASE_EXIT_CODES["explorer"])
 
     # 2. Coder (con prioridad de contexto)
-    coder_obj = build_agent_objective(abs_path, "coder", objective)
+    coder_obj = build_agent_objective(abs_path, "coder", objective, budget=budget)
     if not step("coder", coder_obj, "coder"):
         logger.error("coder", "Coder no pudo completar su tarea tras reintento.")
         print("\n[ABORTADO] @coder falló. Revisa el log del pipeline.")
-        sys.exit(1)
+        _write_status(abs_path, last_step="explorer", status="failed",
+                      failed="coder", log_path=logger.log_path)
+        sys.exit(PHASE_EXIT_CODES["coder"])
 
     # 3. Tester
-    tester_obj = build_agent_objective(abs_path, "tester", objective)
+    tester_obj = build_agent_objective(abs_path, "tester", objective, budget=budget)
     if not step("tester", tester_obj, "tester"):
         logger.error("tester", "Tester no pudo completar su tarea tras reintento.")
         print("\n[ABORTADO] @tester falló. Revisa el log del pipeline.")
-        sys.exit(1)
+        _write_status(abs_path, last_step="coder", status="failed",
+                      failed="tester", log_path=logger.log_path)
+        sys.exit(PHASE_EXIT_CODES["tester"])
 
     # 4. Bucle Tester → Debugger (P5+P6)
     loops = 0
@@ -918,7 +1259,7 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
 
         loops += 1
         logger.warn(f"REINTENTO {loops}/{MAX_DEBUG_LOOPS} — invocando @debugger con error_log real.")
-        debug_obj = build_agent_objective(abs_path, "debugger", objective)
+        debug_obj = build_agent_objective(abs_path, "debugger", objective, budget=budget)
         debug_obj = (f"{debug_obj}\n\n"
                      f"=== ERROR DETECTADO EN EJECUCIÓN/TESTS ===\n{error_log}\n"
                      f"=== FIN ERROR ===\n")
@@ -926,18 +1267,50 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
                                            invoke_as=resolve_agent("debugger", stack["runner"])):
             logger.error("debugger", f"Bucle {loops}: Debugger falló tras reintento.")
             print(f"\n[ABORTADO] @debugger falló en intento {loops}. Revisa log.")
-            sys.exit(1)
+            _write_status(abs_path, last_step="tester", status="failed",
+                          failed="debugger", log_path=logger.log_path)
+            sys.exit(PHASE_EXIT_CODES["debugger"])
         strip_foreign_markers("debugger", abs_path, trusted_initial, logger)
 
     if loops >= MAX_DEBUG_LOOPS:
         logger.warn(f"Alcanzado MAX_DEBUG_LOOPS={MAX_DEBUG_LOOPS}. Pipeline continúa pero tests siguen fallando.")
 
     # 5. SDD-Updater
-    sdd_obj = build_agent_objective(abs_path, "sdd-updater", objective)
+    sdd_obj = build_agent_objective(abs_path, "sdd-updater", objective, budget=budget)
     step("sdd-updater", sdd_obj, "sdd-updater")  # no abortamos si falla
 
     logger.info("PIPELINE FINALIZADO.")
     print(f"\n{'='*60}\n  PIPELINE FINALIZADO\n  Log: {logger.log_path}\n{'='*60}\n")
+
+    # Mejora 3: factura estimada de la corrida.
+    logger.log_cost_report()
+
+    # Mejora 4: status de éxito completo (los wrappers pueden leer pipeline-status.json).
+    _write_status(abs_path, last_step="sdd-updater", status="ok",
+                  failed=None, log_path=logger.log_path)
+    return 0
+
+
+# ─── STATUS JSON (mejora 4) ────────────────────────────────────────────────────
+def _write_status(project_path: str, last_step: str, status: str,
+                  failed: str | None, log_path: str) -> None:
+    """Escribe pipeline-status.json con el último paso completado, el estado y
+    la fase que falló (si aplica). Permite a un wrapper relanzar directo al paso
+    justo: si failed='coder' → relanzar desde coder con --resume.
+    Sobrescribe el anterior (es el estado MÁS RECIENTE de la corrida)."""
+    try:
+        path = os.path.join(project_path, STATUS_FILE)
+        payload = {
+            "last_completed_step": last_step,
+            "failed_step": failed,
+            "status": status,
+            "log": os.path.basename(log_path) if log_path else None,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"  [WARN] no se pudo escribir {STATUS_FILE}: {e}")
 
 
 # ─── PARSER DE ARGUMENTOS (P10) ────────────────────────────────────────────────
@@ -974,6 +1347,18 @@ def parse_args(argv: list[str]):
                              "Usa '-' para leer de stdin.")
     parser.add_argument("--resume", action="store_true",
                         help="Retomar sin preguntar por borrar contexto.")
+    parser.add_argument("--mcp-minimal", action="store_true",
+                        help="Re-aplica el config MCP-minimal del proyecto "
+                             "(merge: respeta las decisiones explícitas ya "
+                             "configuradas en .opencode/opencode.json).")
+    parser.add_argument("--no-mcp-minimal", action="store_true",
+                        help="Evita la generación automática del config MCP-minimal "
+                             "cuando el proyecto no tiene .opencode/opencode.json.")
+    parser.add_argument("--budget-inject", dest="budget", type=int,
+                        default=DEFAULT_CONTEXT_BUDGET_TOKENS,
+                        help=f"Límite máximo de tokens para el contexto inyectado "
+                             f"por agente (default {DEFAULT_CONTEXT_BUDGET_TOKENS}). "
+                             f"0 desactiva el recorte (mejora 2).")
     args = parser.parse_args(argv)
 
     if not args.objective and not args.objective_file:
@@ -996,14 +1381,14 @@ def parse_args(argv: list[str]):
 
     if not obj.strip():
         parser.error("El objetivo está vacío.")
-    return args.project, obj, args.resume
+    return args.project, obj, args.resume, args.mcp_minimal, args.no_mcp_minimal, args.budget
 
 
 if __name__ == "__main__":
     import atexit
     import traceback
 
-    proj, obj, resume = parse_args(sys.argv[1:])
+    proj, obj, resume, mcp_minimal, no_mcp_minimal, budget = parse_args(sys.argv[1:])
     abs_path = os.path.abspath(proj)
     if not os.path.exists(abs_path):
         print(f"[ERROR] La ruta no existe: {abs_path}")
@@ -1036,7 +1421,9 @@ if __name__ == "__main__":
         # Reuso el logger del guard para que run() continúe usando ese mismo
         # archivo de log (en vez de crear uno nuevo). Pasamos el logger
         # explícitamente modificando run() para aceptar logger opcional.
-        run(proj, obj, resume, logger=_guard_logger)
+        run(proj, obj, resume, logger=_guard_logger,
+            mcp_minimal=mcp_minimal, no_mcp_minimal=no_mcp_minimal,
+            budget=budget)
         _pipeline_already_finished["value"] = True
     except KeyboardInterrupt:
         _guard_logger.warn("PIPELINE CANCELADO por el usuario (Ctrl-C).")
