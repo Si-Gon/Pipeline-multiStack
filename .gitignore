@@ -1,5 +1,17 @@
-﻿__pycache__/
+﻿# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
 
-*tools
-run_agents_v3.py
-run_agents_v2.py.bak-20260807
+# ── Entorno ─────────────────────────────────────────────────
+# .env NO se versiona; .env.example sí (es la referencia)
+.env
+.env.local
+.env.*
+!.env.example
+
+# ── Artefactos del pipeline ─────────────────────────────────
+# Backups/artefactos generados en runtime por el propio pipeline
+pipeline-status.json
+run_agents_v2.py.bak-*

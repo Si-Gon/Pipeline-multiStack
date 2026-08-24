@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multi-agent-pipeline"
+version = "0.1.0"
+description = "Orquestación multi-agente con control de tokens y trazabilidad"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Silvio GL" }]
+
+# Dependencias en tiempo de ejecución del orquestador. opencode se invoca
+# como binario externo (OPENCODE_BIN) — no es una dependencia pip aquí.
+dependencies = [
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+# Entry point: `pipeline` se instala globalmente y llama a run_agents_v2.main
+pipeline = "run_agents_v2:main"
+
+[tool.setuptools]
+# Layout flat: el módulo vive en la raíz del repo.
+py-modules = ["run_agents_v2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

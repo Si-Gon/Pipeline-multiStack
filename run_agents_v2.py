@@ -49,7 +49,7 @@ Uso
 Portabilidad (nota de compatibilidad)
 --------------------------------------
 Por defecto asume Windows y `OPENCODE_BIN` apunta a:
-    ~\AppData\Roaming\npm\opencode.cmd
+    ~/AppData/Roaming/npm/opencode.cmd
 
 Para macOS / Linux, define la variable de entorno antes de ejecutar:
     # bash/zsh
@@ -73,6 +73,17 @@ import argparse
 import subprocess
 import threading
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# ─── CARGA DE .env (config por entorno) ──────────────────────────────────────
+# Carga las variables del archivo `.env` ubicado JUNTO a este script (la raíz
+# del repo). Permite sobrescribir configuración sin tocar el código:
+#   OPENCODE_BIN, OPENCODE_AGENTS_DIR, OC_AGENT_TIMEOUT_*, OC_PRICE_* ...
+# Las variables ya definidas en el entorno del sistema tienen PRIORIDAD sobre
+# las del .env (load_dotenv por defecto NO sobrescribe variables existentes).
+# `.env` no se versiona (está en .gitignore); `.env.example` es la plantilla.
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
 # Windows: el stdout por defecto usa cp1252, lo cual revienta al imprimir
 # acentos (ej. en help strings o logs). Forzamos UTF-8.
@@ -1327,6 +1338,66 @@ def _write_status(project_path: str, last_step: str, status: str,
         print(f"  [WARN] no se pudo escribir {STATUS_FILE}: {e}")
 
 
+# ─── SUBCOMANDOS CLI (F3-a status, F3-b cost) ─────────────────────────────────
+def cmd_status(project_path: str) -> None:
+    """F3-a: `pipeline status <proyecto>`. Muestra pipeline-status.json en un
+    formato legible. Pura lectura — no toca el núcleo ni el estado."""
+    status_path = os.path.join(project_path, STATUS_FILE)
+    if not os.path.exists(status_path):
+        print(f"  [STATUS] no hay pipeline-status.json en: {project_path}")
+        print("  Corre el pipeline antes de consultar el estado (o todavía no hay corrida).")
+        return
+    try:
+        with open(status_path, encoding="utf-8") as f:
+            j = json.load(f)
+    except Exception as e:
+        print(f"  [STATUS] no se pudo leer {STATUS_FILE}: {e}")
+        return
+    print(f"  Estado:         {j.get('status', '?')}")
+    print(f"  Último paso:    {j.get('last_completed_step', '?')}")
+    print(f"  Fase fallada:   {j.get('failed_step') or '(ninguna)'}")
+    print(f"  Log:            {j.get('log') or '(n/a)'}")
+    print(f"  Fecha:          {j.get('timestamp', '?')}")
+
+
+def cmd_cost(project_path: str) -> None:
+    """F3-b: `pipeline cost <proyecto>`. Lee el log más reciente y muestra la
+    sección de costo estimado. Pura lectura — no re-ejecuta nada."""
+    artifacts = os.path.join(project_path, ARTIFACTS_DIR)
+    logs = sorted(glob.glob(os.path.join(artifacts, "pipeline-*.log")),
+                  key=os.path.getmtime, reverse=True)
+    if not logs:
+        print(f"  [COSTO] no hay logs del pipeline en: {artifacts}")
+        return
+    last = logs[0]
+    try:
+        with open(last, encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception as e:
+        print(f"  [COSTO] no se pudo leer el log {last}: {e}")
+        return
+    # Busca la sección COSTO ESTIMADO (la loguea log_cost_report al final de run()).
+    needle = "COSTO ESTIMADO"
+    idx = content.find(needle)
+    if idx == -1:
+        print(f"  [COSTO] el log {os.path.basename(last)} no contiene un reporte de costo.")
+        print("  (Solo se escribe si la corrida llegó al final y reportó cost_est.)")
+        return
+    # Retrocede al inicio de la línea que contiene el marcador (para no cortar
+    # el `[` inicial de `[COSTO ESTIMADO]`).
+    line_start = content.rfind("\n", 0, idx) + 1
+    block = content[line_start:].splitlines()
+    # Recorta hasta el total (TOTAL) o un máximo de líneas para no desbordar.
+    out = []
+    for ln in block:
+        out.append(ln)
+        if ln.strip().startswith("TOTAL") or len(out) > 8:
+            break
+    print(f"  [COSTO] del log: {os.path.basename(last)}")
+    for ln in out:
+        print(" " * 2 + ln)
+
+
 # ─── PARSER DE ARGUMENTOS (P10) ────────────────────────────────────────────────
 def parse_args(argv: list[str]):
     """Soporta:
@@ -1398,11 +1469,51 @@ def parse_args(argv: list[str]):
     return args.project, obj, args.resume, args.mcp_minimal, args.no_mcp_minimal, args.budget
 
 
-if __name__ == "__main__":
+def _print_cli_help() -> None:
+    print("Uso del CLI `pipeline`:")
+    print("  pipeline <proyecto> \"objetivo\" [flags]   # corre el pipeline (legacy)")
+    print("  pipeline status <proyecto>               # estado de la última corrida")
+    print("  pipeline cost <proyecto>                 # factura estimada del último log")
+    print("  pipeline --help                          # flags detallados")
+    print()
+    print("Subcomandos de lectura (F3-a/F3-b): status, cost.")
+
+
+def _run_read_subcommand(cmd: str, rest: list[str]) -> None:
+    """Ejecuta un subcomando de lectura (status/cost) contra un proyecto."""
+    if not rest:
+        print(f"  [ERROR] falta la ruta del proyecto: pipeline {cmd} <proyecto>")
+        sys.exit(2)
+    project_path = os.path.abspath(rest[0])
+    if not os.path.exists(project_path):
+        print(f"  [ERROR] La ruta no existe: {project_path}")
+        sys.exit(1)
+    if cmd == "status":
+        cmd_status(project_path)
+    elif cmd == "cost":
+        cmd_cost(project_path)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Punto de entrada del CLI. `argv` permite inyección para tests; si es
+    None, usa sys.argv[1:]. Convierte el antiguo bloque `__main__` en una
+    función llamable → habilita el entry point del paquete (`pipeline`)."""
     import atexit
     import traceback
 
-    proj, obj, resume, mcp_minimal, no_mcp_minimal, budget = parse_args(sys.argv[1:])
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if not argv:
+        _print_cli_help()
+        sys.exit(2)
+
+    # Dispatch de subcomandos (Opción A, F3). Si el primer token es un
+    # subcomando conocido, lo maneja; si no, cae al comportamiento legacy
+    # (pipeline <proyecto> "objetivo") que se migrará en F3-c.
+    first = argv[0]
+    if first in ("status", "cost"):
+        _run_read_subcommand(first, argv[1:])
+        return
+    proj, obj, resume, mcp_minimal, no_mcp_minimal, budget = parse_args(argv)
     abs_path = os.path.abspath(proj)
     if not os.path.exists(abs_path):
         print(f"[ERROR] La ruta no existe: {abs_path}")
@@ -1459,3 +1570,7 @@ if __name__ == "__main__":
         print(f"\n{'='*60}\n  PIPELINE ABORTADO (excepción)\n  Error: {e}\n  Log: {_guard_logger.log_path}\n{'='*60}\n",
               file=sys.stderr)
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
