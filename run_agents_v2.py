@@ -39,17 +39,17 @@ Uso
     python run_agents_v2.py <ruta_del_proyecto> "objetivo corto"
 
     # Objetivo desde archivo (specs largas, recomendado para specs como
-    # spec-rpg.md). Daría lo mismo que pegar el texto en argv, pero evita
+    # mi-spec.md). Daría lo mismo que pegar el texto en argv, pero evita
     # problemas de quoting con caracteres especiales y nuevas líneas.
-    python run_agents_v2.py <ruta_del_proyecto> --objective-file spec-rpg.md
+    python run_agents_v2.py <ruta_del_proyecto> --objective-file mi-spec.md
 
     # Retomar tras caída sin re-preguntar por borrar contexto
     python run_agents_v2.py <ruta_del_proyecto> "objetivo" --resume
 
-Portabilidad (nota P11)
------------------------
+Portabilidad (nota de compatibilidad)
+--------------------------------------
 Por defecto asume Windows y `OPENCODE_BIN` apunta a:
-    C:\\Users\\Silvi\\AppData\\Roaming\\npm\\opencode.cmd
+    ~\AppData\Roaming\npm\opencode.cmd
 
 Para macOS / Linux, define la variable de entorno antes de ejecutar:
     # bash/zsh
@@ -84,10 +84,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         pass
 
 # ─── CONFIGURACIÓN DE MODELOS ─────────────────────────────────────────────────
-# Nota P11: cambiar para otro entorno vía env vars o editando aquí abajo.
+# Configurar para otro entorno vía env vars o editando aquí abajo.
 MODEL_FAST   = "opencode-go/deepseek-v4-flash"
 MODEL_CODING = "opencode-go/qwen3.7-plus"
 MODEL_DEBUG  = "opencode-go/kimi-k2.7-code"
+MODEL_LOCAL  = "ollama/qwen3-coder:30b"   # modelo local vía Ollama (daemon 11434)
 
 AGENT_MODELS = {
     "explorer":    MODEL_FAST,
@@ -99,11 +100,11 @@ AGENT_MODELS = {
 
 # ─── BUDGET DE CONTEXTO INYECTADO (mejora 2) ──────────────────────────────
 # Presupuesto máximo de tokens para el bloque "CONTEXTO INYECTADO" por agente.
-# Es una RED DE SEGURIDAD. Default = ~9K, medido sobre los repos reales de
-# Silvio: el contexto inyectado de coder en ruteo-mvp pesa ~6.5K tok y en
-# SmallBooks ~5.7K. 9K está COMFORTABLEMENTE por encima de lo normal → NO recorta
-# tu flujo típico; solo actúa si el inyectado crece sin control (resume de specs
-# largas/contexto acumulado). Configurable por CLI: --budget-inject N
+# Es una RED DE SEGURIDAD. Default = ~9K: el contexto inyectado del coder puede
+# superar 6K tokens en proyectos medianos, y el de tester/debugger ronda 1.5-2K.
+# 9K está cómodamente por encima de lo normal → NO recorta tu flujo típico;
+# solo actúa si el inyectado crece sin control (resume de specs largas /
+# contexto acumulado). Ajustar --budget-inject si es necesario.
 DEFAULT_CONTEXT_BUDGET_TOKENS = 9000
 # Cuando se recorta, cuántas líneas usar para los resúmenes de bloques viejos.
 BUDGET_EVICT_MAX_LINES = 8
@@ -138,11 +139,12 @@ STATUS_FILE = "pipeline-status.json"
 # ─── CONSTANTES DEL SISTEMA ───────────────────────────────────────────────────
 # IMPORTANTE (Windows): usar el .exe directo del wrapper opencode.cmd para
 # evitar el rc=1 spurio que genera el .cmd por imprimir logs ANSI en stderr.
-# El .cmd en C:\\Users\\Silvi\\AppData\\Roaming\\npm\\opencode.cmd sólo hace:
-#   "%dp0%\node_modules\opencode-ai\bin\opencode.exe" %*
-# Llamar al .exe directo da subprocess.run(...).returncode correcto.
-_DEFAULT_WIN_EXE = r"C:\Users\Silvi\AppData\Roaming\npm\node_modules\opencode-ai\bin\opencode.exe"
-_DEFAULT_WIN_CMD = r"C:\Users\Silvi\AppData\Roaming\npm\opencode.cmd"
+_USER_HOME = os.path.expanduser("~")
+_DEFAULT_WIN_EXE = os.path.join(
+    _USER_HOME, "AppData", "Roaming", "npm",
+    "node_modules", "opencode-ai", "bin", "opencode.exe",
+)
+_DEFAULT_WIN_CMD = os.path.join(_USER_HOME, "AppData", "Roaming", "npm", "opencode.cmd")
 _DEFAULT_UNIX_BIN = "opencode"
 
 def _resolve_opencode_bin() -> str:
@@ -163,9 +165,9 @@ def _resolve_opencode_bin() -> str:
 OPENCODE_BIN = _resolve_opencode_bin()
 MAX_DEBUG_LOOPS     = 3
 AGENT_TIMEOUT_SEC   = 20 * 60  # default para todos los agentes
-# PAUD-002: por-agente override (auditoría mostró coder TIMEOUT sistemático
-# a 1200s/20min). Permite timeouts más largos por agente sin tocar el
-# default. Override vía env var también: OC_AGENT_TIMEOUT_CODER=2400.
+# Timeout por-agente override: el coder suele hacer trabajos pesados (varias
+# ediciones, specs completas) — 40min es más razonable para proyectos medianos.
+# Override también vía env var: OC_AGENT_TIMEOUT_CODER=3600
 def _agent_timeout(agent: str) -> int:
     env_key = f"OC_AGENT_TIMEOUT_{agent.upper().replace('-', '_')}"
     if env_key in os.environ:
@@ -672,8 +674,8 @@ def _run_playwright_headless(project_path: str, logger: PipelineLogger) -> tuple
     #    errores de consola, sólo screenshot. NO nos sirve.
     # 2) Mejor: `npx -y playwright@latest codegen` no es headless.
     # 3) Enfoque definitivo: caché PERSISTENTE en ~/.opencode/playwright-cache/
-    # (PAUD-008): antes se usaba un workspace efímero en %TEMP%/pipeline-pw-tmp-*
-    # que descargaba Playwright en CADA corrida (~30s-6min extra). Ahora
+    # (antes se usaba un workspace efímero en %TEMP%/pipeline-pw-tmp-* que
+    # descargaba Playwright en CADA corrida — 30s-6min extra). Ahora
     # reusamos un dir fijo: si ya existe node_modules/playwright, sólo
     # escribimos el script .cjs y corremos. Limpieza: NO borramos el caché
     # (es el punto). Si se corrompe, el usuario puede borrarlo a mano.
@@ -947,10 +949,10 @@ def run_agent(agent: str, project_path: str, objective: str, logger: PipelineLog
     print(f"\n{'─'*60}\n  > Lanzando {label} [{model}]\n{'─'*60}")
     logger.info(f"Lanzando {label} (model={model})")
 
-    # PAUD-206 (2026-08-07): WinError 206 con objetivos grandes — Windows limita
-    # argv a ~32K chars y el objetivo (spec + contexto inyectado) lo excede.
-    # Fix: escribir el objetivo COMPLETO a un archivo en pipeline-artifacts/
-    # (gitignoreado) y adjuntarlo con `opencode run ... -f <archivo>`.
+    # WinError 206: Windows limita argv a ~32K chars y el objetivo (spec +
+    # contexto inyectado) lo excede. Fix: escribir el objetivo COMPLETO a un
+    # archivo temporal en pipeline-artifacts/ (gitignoreado) y adjuntarlo
+    # con `opencode run ... -f <archivo>`.
     obj_dir = os.path.join(project_path, "pipeline-artifacts")
     os.makedirs(obj_dir, exist_ok=True)
     obj_file = os.path.join(obj_dir, f"objetivo-{agent}-{int(time.time())}.md")
@@ -970,7 +972,7 @@ def run_agent(agent: str, project_path: str, objective: str, logger: PipelineLog
     ]
 
     try:
-        # PAUD-003 + stream en vivo: usamos Popen con PIPE + thread lector
+        # Stream en vivo: usamos Popen con PIPE + thread lector
         # que imprime cada línea CON PREFIJO en tiempo real Y la colecciona
         # en buffer interno para diagnóstico de rc spurios. Asi el usuario
         # ve el progreso del agente en terminal (no queda "desfazado" como
@@ -1320,17 +1322,17 @@ def parse_args(argv: list[str]):
         python run_agents_v2.py <project> --objective-file spec.md
         python run_agents_v2.py <project> \"<objetivo>\" --resume
 
-    ¿Por qué --objective-file (P10)? Hasta ahora usas el script pegando el
+    ¿Por qué --objective-file? Hasta ahora usas el script pegando el
     objetivo directo en la línea de comandos. Eso funciona, pero para specs
-    largas con varias líneas (ej: spec-rpg.md) el quoting en PowerShell/bash
+    largas con varias líneas (ej: mi-spec.md) el quoting en PowerShell/bash
     es frágil: los backticks, comillas simples/dobles, ${...}, y newlines
     pueden romper la transmisión del objetivo al script, y de ahí a opencode.
 
     --objective-file evita esos problemas: el script lee el archivo y mantiene
     el byte-for-byte. Dos patrones recomendados:
-      a) Escribir la spec en un archivo (spec-rpg.md, tarea-xyz.txt) en el
+      a) Escribir la spec en un archivo (mi-spec.md, tarea-xyz.txt) en el
          propio proyecto y correr:
-             python run_agents_v2.py . --objective-file spec-rpg.md
+             python run_agents_v2.py . --objective-file mi-spec.md
       b) Generar el objetivo al vuelo desde otro proceso/redirección:
              python run_agents_v2.py . --objective-file -   # lee stdin
     """
@@ -1394,8 +1396,8 @@ if __name__ == "__main__":
         print(f"[ERROR] La ruta no existe: {abs_path}")
         sys.exit(1)
 
-    # PAUD-003: creamos el logger aquí, antes de run(), para garanttizar que
-    # exista incluso si run() revienta en su primera línea. Esto habilita que
+    # Creamos el logger aquí, antes de run(), para garantizar que exista
+    # incluso si run() revienta en su primera línea. Esto habilita que
     # el `atexit` handler pueda escribir el resumen final SIEMPRE.
     _guard_logger = PipelineLogger(abs_path)
     _guard_logger.info(f"(guard) Logger preventivo creado. Proyecto: {abs_path}")
@@ -1403,7 +1405,7 @@ if __name__ == "__main__":
     _pipeline_already_finished = {"value": False}
 
     def _atexit_handler():
-        """PAUD-003: garantiza que cualquier salida inesperada del script
+        """Garantiza que cualquier salida inesperada del script
         quede registrada en el log con estado ABORTADO + stack trace si aplica.
         Se ejecuta SIEMPRE que el proceso Python termine, sea normal, sys.exit,
         excepción no capturada, o SIGTERM (en POSIX)."""
@@ -1437,7 +1439,7 @@ if __name__ == "__main__":
         raise
     except Exception as e:
         # Cualquier otra excepción no capturada por run() → stack trace completo
-        # al log + stderr, y mensaje final claro. PAUD-003 crítico.
+        # al log + stderr, y mensaje final claro.
         tb = traceback.format_exc()
         _guard_logger.error("uncaught",
                             f"Excepción no capturada: {e}\n{tb}")
