@@ -15,3 +15,6 @@ __pycache__/
 # Backups/artefactos generados en runtime por el propio pipeline
 pipeline-status.json
 run_agents_v2.py.bak-*
+# ── Editor ───────────────────────────────────────────────────
+.vscode/
+.idea/

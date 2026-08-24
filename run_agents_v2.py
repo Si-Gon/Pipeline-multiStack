@@ -74,6 +74,7 @@ import subprocess
 import threading
 from pathlib import Path
 
+import yaml
 from dotenv import load_dotenv
 
 # ─── CARGA DE .env (config por entorno) ──────────────────────────────────────
@@ -94,20 +95,92 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     except Exception:
         pass
 
-# ─── CONFIGURACIÓN DE MODELOS ─────────────────────────────────────────────────
-# Configurar para otro entorno vía env vars o editando aquí abajo.
-MODEL_FAST   = "opencode-go/deepseek-v4-flash"
-MODEL_CODING = "opencode-go/qwen3.7-plus"
-MODEL_DEBUG  = "opencode-go/kimi-k2.7-code"
-MODEL_LOCAL  = "ollama/qwen3-coder:30b"   # modelo local vía Ollama (daemon 11434)
+# ─── CONFIGURACIÓN DE MODELOS (defaults) ───────────────────────────────────
+# Defaults cuando NO hay pipeline.yaml en el proyecto. Un usuario puede
+# sobreescribir por proyecto con `pipeline.yaml` (ver load_pipeline_config).
+DEFAULT_MODEL_FAST   = "opencode-go/deepseek-v4-flash"
+DEFAULT_MODEL_CODING = "opencode-go/qwen3.7-plus"
+DEFAULT_MODEL_DEBUG  = "opencode-go/kimi-k2.7-code"
+DEFAULT_MODEL_LOCAL  = "ollama/qwen3-coder:30b"   # modelo local vía Ollama
 
-AGENT_MODELS = {
-    "explorer":    MODEL_FAST,
-    "coder":       MODEL_CODING,
-    "tester":      MODEL_CODING,
-    "debugger":    MODEL_DEBUG,
-    "sdd-updater": MODEL_FAST,
+DEFAULT_AGENT_MODELS = {
+    "explorer":    DEFAULT_MODEL_FAST,
+    "coder":       DEFAULT_MODEL_CODING,
+    "tester":      DEFAULT_MODEL_CODING,
+    "debugger":    DEFAULT_MODEL_DEBUG,
+    "sdd-updater": DEFAULT_MODEL_FAST,
 }
+
+# Runner por defecto (Opción A: opencode hoy, con template preparada para
+# otros CLIs en el futuro). Cada proyecto puede definirlo en pipeline.yaml.
+DEFAULT_RUNNER_NAME   = "opencode"
+DEFAULT_RUNNER_BINARY = ""  # vacío → se resuelve automáticamente con _resolve_opencode_bin
+
+# Archivo de config opcional por proyecto.
+PIPELINE_CONFIG_FILE = "pipeline.yaml"
+
+# Cache de config cargada por proyecto (evita re-leer en cada run_agent).
+_config_cache: dict = {}
+
+
+def load_pipeline_config(project_path: str) -> dict:
+    """Carga la configuración opcional `pipeline.yaml` del proyecto y la mezcla
+    con los defaults. Devuelve un dict con `models`, `runner`, `budget`:
+      {
+        "models": {...rol: modelo...},   # defaults si no se definen
+        "runner": {"name", "binary", "run_template"},
+        "budget": int,
+      }
+    Si el proyecto no tiene pipeline.yaml, devuelve los defaults (el pipeline
+    funciona igual que antes). Opción A: modelos configurables por rol; el
+    runner queda preparado como template para expandir a otros CLIs luego."""
+    abs_p = os.path.abspath(project_path)
+    if abs_p in _config_cache:
+        return _config_cache[abs_p]
+
+    config = {
+        "models": dict(DEFAULT_AGENT_MODELS),
+        "runner": {
+            "name": DEFAULT_RUNNER_NAME,
+            "binary": DEFAULT_RUNNER_BINARY,
+            "run_template": None,   # None = usar el template hardcodeado de opencode
+        },
+        "budget": DEFAULT_CONTEXT_BUDGET_TOKENS,
+    }
+
+    cfg_path = os.path.join(abs_p, PIPELINE_CONFIG_FILE)
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                user_cfg = yaml.safe_load(f) or {}
+            # Models: solo sobreescribe los roles presentes
+            if isinstance(user_cfg.get("models"), dict):
+                for role in DEFAULT_AGENT_MODELS:
+                    if role in user_cfg["models"]:
+                        config["models"][role] = user_cfg["models"][role]
+            # Runner: si se define, gana (template preparada para futuro)
+            r = user_cfg.get("runner")
+            if isinstance(r, dict):
+                if r.get("name"):
+                    config["runner"]["name"] = r["name"]
+                if r.get("binary"):
+                    config["runner"]["binary"] = r["binary"]
+                if r.get("run_template"):
+                    config["runner"]["run_template"] = r["run_template"]
+            # Budget
+            if isinstance(user_cfg.get("budget"), int):
+                config["budget"] = user_cfg["budget"]
+        except Exception as e:
+            print(f"  [WARN] pipeline.yaml inválido ({e}) — usando defaults.")
+
+    _config_cache[abs_p] = config
+    return config
+
+
+def get_agent_model(project_path: str, agent: str) -> str:
+    """Modelo efectivo para un rol, respetando pipeline.yaml del proyecto."""
+    cfg = load_pipeline_config(project_path)
+    return cfg["models"].get(agent, DEFAULT_MODEL_FAST)
 
 # ─── BUDGET DE CONTEXTO INYECTADO ─────────────────────────────────────────
 # Presupuesto máximo de tokens para el bloque "CONTEXTO INYECTADO" por agente.
@@ -122,18 +195,35 @@ BUDGET_EVICT_MAX_LINES = 8
 
 # ─── PRECIOS DE MODELO ─────────────────────────────────────────────────────
 # Costo estimado por millón de tokens (USD), entrada/salida. Son estimaciones
-# razonables de los modelos opencode-go/deepseek/qwen/kimi; se pueden override
-# con env vars: OC_PRICE_IN_<NOMBRE>=X.X, OC_PRICE_OUT_<NOMBRE>=X.X  (por M tok)
-# Los precios se usan SOLO para reportar la factura estimada de la corrida.
+# razonables de los modelos default. Para modelos configurados por el usuario
+# en pipeline.yaml, se puede setear precio con env: OC_PRICE_IN_<MODELO>=X.X
+# y OC_PRICE_OUT_<MODELO>=X.X (por M tok) — ver get_model_pricing().
 MODEL_PRICING = {
-    # (in $/M tok, out $/M tok)
-    MODEL_FAST:   (0.25, 1.00),   # deepseek-v4-flash (económico)
-    MODEL_CODING: (1.20, 2.40),   # qwen3.7-plus
-    MODEL_DEBUG:  (1.00, 2.00),   # kimi-k2.7-code
-    MODEL_LOCAL:  (0.00, 0.00),   # ollama local — gratis
+    # (in $/M tok, out $/M tok) — claves por default
+    DEFAULT_MODEL_FAST:   (0.25, 1.00),   # deepseek-v4-flash (económico)
+    DEFAULT_MODEL_CODING: (1.20, 2.40),   # qwen3.7-plus
+    DEFAULT_MODEL_DEBUG:  (1.00, 2.00),   # kimi-k2.7-code
+    DEFAULT_MODEL_LOCAL:  (0.00, 0.00),   # ollama local — gratis
 }
 # Fallback para cualquier modelo no listado.
 DEFAULT_PRICING = (0.50, 1.50)
+
+
+def get_model_pricing(model: str) -> tuple:
+    """Precio estimado por M tokens (in, out) para un modelo. Si el modelo no
+    está en MODEL_PRICING, permite override por env OC_PRICE_IN_/OC_PRICE_OUT_
+    (con el nombre del modelo sanitizado), si no usa DEFAULT_PRICING."""
+    if model in MODEL_PRICING:
+        return MODEL_PRICING[model]
+    env_key = re.sub(r"[^A-Z0-9]+", "_", model.upper()).strip("_")
+    try:
+        p_in = float(os.environ.get(f"OC_PRICE_IN_{env_key}",
+                                    os.environ.get("OC_PRICE_IN", DEFAULT_PRICING[0])))
+        p_out = float(os.environ.get(f"OC_PRICE_OUT_{env_key}",
+                                     os.environ.get("OC_PRICE_OUT", DEFAULT_PRICING[1])))
+        return (p_in, p_out)
+    except ValueError:
+        return DEFAULT_PRICING
 
 # ─── EXIT CODES POR FASE ───────────────────────────────────────────────────
 # 0 = éxito completo. Cada fase fallida devuelve un código distinto para que un
@@ -952,10 +1042,46 @@ def build_agent_objective(project_path: str, agent: str, objective: str,
 
 
 # ─── EJECUCIÓN DE AGENTES ─────────────────────────────────────────────────────
+def _build_runner_cmd(runner: dict, project_path: str, obj_file: str,
+                      agent: str, model: str) -> list[str]:
+    """Construye el comando de invocación según el runner configurado.
+
+    Opción A (F4): por defecto usa el formato nativo de opencode. Si pipeline.yaml
+    define un `run_template` (o un runner distinto), se usa la plantilla — esa
+    es la puerta preparada para soportar otros CLIs (claude-code, codex, etc.)
+    en el futuro sin tocar el núcleo."""
+    if runner.get("run_template"):
+        template = runner["run_template"]
+        placeholders = {
+            "binary": runner.get("binary") or _resolve_opencode_bin(),
+            "objective_file": obj_file,
+            "agent": agent,
+            "model": model,
+            "dir": project_path,
+        }
+        expanded = template.format(**placeholders)
+        return [part for part in expanded.split(" ") if part]
+
+    # Runner por defecto: opencode nativo (comportamiento actual).
+    binary = runner.get("binary") or _resolve_opencode_bin()
+    return [
+        binary, "run",
+        "Ejecuta EXACTAMENTE el objetivo completo del archivo adjunto (-f). "
+        "No lo resumas ni lo parafrasees: LEE el archivo y ejecuta todo lo que pide, "
+        "incluido el contexto inyectado. Trabaja directamente sobre el proyecto.",
+        "-f", obj_file,
+        "--agent", agent,
+        "--model", model,
+        "--auto",
+        "--dir", project_path,
+    ]
+
+
 def run_agent(agent: str, project_path: str, objective: str, logger: PipelineLogger,
               invoke_as: str | None = None) -> int:
     invoke_as = invoke_as or agent
-    model = AGENT_MODELS.get(agent, MODEL_FAST)
+    cfg = load_pipeline_config(project_path)
+    model = get_agent_model(project_path, agent)
     label = f"@{agent}" if invoke_as == agent else f"@{agent} (especializado: {invoke_as})"
     print(f"\n{'─'*60}\n  > Lanzando {label} [{model}]\n{'─'*60}")
     logger.info(f"Lanzando {label} (model={model})")
@@ -970,17 +1096,8 @@ def run_agent(agent: str, project_path: str, objective: str, logger: PipelineLog
     with open(obj_file, "w", encoding="utf-8") as _f:
         _f.write(objective)
 
-    cmd = [
-        OPENCODE_BIN, "run",
-        "Ejecuta EXACTAMENTE el objetivo completo del archivo adjunto (-f). "
-        "No lo resumas ni lo parafrasees: LEE el archivo y ejecuta todo lo que pide, "
-        "incluido el contexto inyectado. Trabaja directamente sobre el proyecto.",
-        "-f", obj_file,
-        "--agent", invoke_as,
-        "--model", model,
-        "--auto",
-        "--dir", project_path,
-    ]
+    runner = cfg["runner"]
+    cmd = _build_runner_cmd(runner, project_path, obj_file, invoke_as, model)
 
     try:
         # Stream en vivo: usamos Popen con PIPE + thread lector

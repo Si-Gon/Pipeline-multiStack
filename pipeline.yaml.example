@@ -1,0 +1,33 @@
+# ─────────────────────────────────────────────────────────────────────────
+# pipeline.yaml — config opcional POR PROYECTO (F4)
+# Copia este archivo a `pipeline.yaml` en la raíz de un proyecto para
+# sobreescribir la config del pipeline SIN tocar el código ni el .env global.
+#
+# Todos los valores son opcionales: si un bloque no está, se usan los defaults.
+# Los modelos se configuran por ROL, de forma agnóstica al runner (ver runner).
+# ─────────────────────────────────────────────────────────────────────────
+
+# Modelos por rol (rol: nombre-modelo). Opcional — defaults si se omite.
+models:
+  # explorer:    opencode-go/deepseek-v4-flash      # (default — rápido, análisis)
+  # coder:       opencode-go/qwen3.7-plus           # (default — código)
+  # tester:      opencode-go/qwen3.7-plus           # (default — pruebas)
+  # debugger:    opencode-go/kimi-k2.7-code         # (default — debug)
+  # sdd-updater: opencode-go/deepseek-v4-flash      # (default — documentación)
+  #
+  # Ejemplo: usar un modelo propio para el coder y otro más liviano para el tester:
+  # coder:  opencode-go/mi-modelo-coder
+  # tester: opencode-go/modelo-ligero
+
+# Runner (el CLI de agente que ejecuta el pipeline).
+# Opción A: hoy el runner es opencode. El `run_template` es la PUERTA preparada
+# para soportar otros CLIs (claude-code, codex, etc.) en el futuro sin tocar
+# el núcleo. Por ahora usar el default (opencode) o definir solo `binary`.
+runner:
+  # name: opencode
+  # binary:  opencode                    # binario a invocar (autodetectado si vacío)
+  # run_template: |                      # plantilla avanzada (solo si sabes lo que haces)
+  #   {binary} run {objective_file} --agent {agent} --model {model} --auto --dir {dir}
+
+# Presupuesto de contexto inyectado por agente (tokens). Optional.
+# budget: 9000

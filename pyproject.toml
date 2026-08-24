@@ -15,6 +15,7 @@ authors = [{ name = "Silvio GL" }]
 # como binario externo (OPENCODE_BIN) — no es una dependencia pip aquí.
 dependencies = [
     "python-dotenv>=1.0",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]

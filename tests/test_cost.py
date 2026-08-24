@@ -13,15 +13,15 @@ class _FakeLogger:
 
 def test_add_cost_acumula_por_modelo():
     lg = _FakeLogger()
-    R.PipelineLogger.add_cost(lg, R.MODEL_FAST, 1000, 500)
-    R.PipelineLogger.add_cost(lg, R.MODEL_FAST, 2000, 1000)
-    assert lg._cost[R.MODEL_FAST] == [3000, 1500]
+    R.PipelineLogger.add_cost(lg, R.DEFAULT_MODEL_FAST, 1000, 500)
+    R.PipelineLogger.add_cost(lg, R.DEFAULT_MODEL_FAST, 2000, 1000)
+    assert lg._cost[R.DEFAULT_MODEL_FAST] == [3000, 1500]
 
 
 def test_cost_report_muestra_modelos_y_total():
     lg = _FakeLogger()
-    R.PipelineLogger.add_cost(lg, R.MODEL_FAST, 5000, 2000)
-    R.PipelineLogger.add_cost(lg, R.MODEL_CODING, 12000, 3000)
+    R.PipelineLogger.add_cost(lg, R.DEFAULT_MODEL_FAST, 5000, 2000)
+    R.PipelineLogger.add_cost(lg, R.DEFAULT_MODEL_CODING, 12000, 3000)
     rep = R.PipelineLogger.cost_report(lg)
     assert "deepseek-v4-flash" in rep
     assert "qwen3.7" in rep
