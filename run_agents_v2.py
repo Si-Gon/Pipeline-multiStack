@@ -98,7 +98,7 @@ AGENT_MODELS = {
     "sdd-updater": MODEL_FAST,
 }
 
-# ─── BUDGET DE CONTEXTO INYECTADO (mejora 2) ──────────────────────────────
+# ─── BUDGET DE CONTEXTO INYECTADO ─────────────────────────────────────────
 # Presupuesto máximo de tokens para el bloque "CONTEXTO INYECTADO" por agente.
 # Es una RED DE SEGURIDAD. Default = ~9K: el contexto inyectado del coder puede
 # superar 6K tokens en proyectos medianos, y el de tester/debugger ronda 1.5-2K.
@@ -109,7 +109,7 @@ DEFAULT_CONTEXT_BUDGET_TOKENS = 9000
 # Cuando se recorta, cuántas líneas usar para los resúmenes de bloques viejos.
 BUDGET_EVICT_MAX_LINES = 8
 
-# ─── PRECIOS DE MODELO (mejora 3) ──────────────────────────────────────────
+# ─── PRECIOS DE MODELO ─────────────────────────────────────────────────────
 # Costo estimado por millón de tokens (USD), entrada/salida. Son estimaciones
 # razonables de los modelos opencode-go/deepseek/qwen/kimi; se pueden override
 # con env vars: OC_PRICE_IN_<NOMBRE>=X.X, OC_PRICE_OUT_<NOMBRE>=X.X  (por M tok)
@@ -124,7 +124,7 @@ MODEL_PRICING = {
 # Fallback para cualquier modelo no listado.
 DEFAULT_PRICING = (0.50, 1.50)
 
-# ─── EXIT CODES POR FASE (mejora 4) ────────────────────────────────────────
+# ─── EXIT CODES POR FASE ───────────────────────────────────────────────────
 # 0 = éxito completo. Cada fase fallida devuelve un código distinto para que un
 # wrapper pueda relanzar DIRECTAMENTE al paso que falló (resume granular).
 PHASE_EXIT_CODES = {
@@ -275,7 +275,7 @@ class PipelineLogger:
 
         self.log(f"Logger inicializado en {self.log_path}")
 
-        # ── Contador de costo estimado (mejora 3) ────────────────────────
+        # ── Contador de costo estimado ────────────────────────────────
         # Acumula por modelo: {model: [in_tok, out_tok]}. El costo real no se
         # mide (opencode no expone tokens por API en este flujo); se ESTIMA a
         # partir del objetivo enviado (input) y del output coleccionado. Es una
@@ -306,7 +306,7 @@ class PipelineLogger:
     def debug(self, msg: str):
         self.log(msg, logging.DEBUG)
 
-    # ── Contador de costo estimado (mejora 3) ─────────────────────────────
+    # ── Contador de costo estimado ─────────────────────────────────────────
     def add_cost(self, model: str, in_tok: int, out_tok: int):
         """Acumula tokens estimados (in/out) por modelo para la factura."""
         if not model:
@@ -876,7 +876,7 @@ def log_token_metrics(logger, agent: str, project_path: str, message: str) -> No
 
 
 def enforce_context_budget(project_path: str, agent: str, budget: int) -> str:
-    """Red de seguridad (mejora 2): si el contexto inyectado que recibiría el
+    """Red de seguridad: si el contexto inyectado que recibiría el
     agente supera `budget` tokens, lo recorta de forma determinista y PRIORIZADA:
     conserva íntegro el bloque del agente anterior (el más relevante) y resume los
     más antiguos a BUDGET_EVICT_MAX_LINES. Devuelve el contexto recortado (lista
@@ -925,7 +925,7 @@ def build_agent_objective(project_path: str, agent: str, objective: str,
                           budget: int = 0) -> str:
     """Construye el prompt del agente: contexto primero, luego bloque de
     objetivo del usuario, luego instrucción de cierre con el marker.
-    `budget`>0 aplica el recorte de contexto inyectado (mejora 2)."""
+    `budget`>0 aplica el recorte de contexto inyectado."""
     ctx = os.path.join(project_path, CONTEXT_FILE)
     has_prior_context = os.path.exists(ctx) and has_section(project_path, "## Contexto del Proyecto")
     context_priority = CONTEXT_PRIORITY_HEADER if has_prior_context else ""
@@ -1247,6 +1247,12 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
                       failed="tester", log_path=logger.log_path)
         sys.exit(PHASE_EXIT_CODES["tester"])
 
+    # Mejora 6: re-detectar el stack antes del bucle de debug. El coder puede
+    # haber cambiado el runner (agregó package.json, pom.xml, wrapper, etc.),
+    # así que re-evaluamos antes de decidir cómo ejecutar/verificar tests.
+    stack = detect_stack(abs_path)
+    logger.info(f"Stack re-detectado (tras coder): {stack}")
+
     # 4. Bucle Tester → Debugger (P5+P6)
     loops = 0
     while loops < MAX_DEBUG_LOOPS:
@@ -1277,9 +1283,13 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
     if loops >= MAX_DEBUG_LOOPS:
         logger.warn(f"Alcanzado MAX_DEBUG_LOOPS={MAX_DEBUG_LOOPS}. Pipeline continúa pero tests siguen fallando.")
 
-    # 5. SDD-Updater
+    # 5. SDD-Updater (no abortamos si falla, pero ahora SÍ lo informamos)
     sdd_obj = build_agent_objective(abs_path, "sdd-updater", objective, budget=budget)
-    step("sdd-updater", sdd_obj, "sdd-updater")  # no abortamos si falla
+    sdd_ok = step("sdd-updater", sdd_obj, "sdd-updater")
+    if not sdd_ok:
+        logger.warn("Sdd-updater no completó su fase; el SDD puede estar desactualizado.")
+        print("[AVISO] @sdd-updater no completó. El SDD del proyecto puede estar "
+              "desactualizado — revisa el log si necesitas documentación precisa.")
 
     logger.info("PIPELINE FINALIZADO.")
     print(f"\n{'='*60}\n  PIPELINE FINALIZADO\n  Log: {logger.log_path}\n{'='*60}\n")
@@ -1287,13 +1297,15 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
     # Mejora 3: factura estimada de la corrida.
     logger.log_cost_report()
 
-    # Mejora 4: status de éxito completo (los wrappers pueden leer pipeline-status.json).
+    # Mejora 4+5: status final. Si sdd-updater no cerró, lo marcamos en el status
+    # como fase pendiente/incompleta (pero el pipeline no se considera fallido).
     _write_status(abs_path, last_step="sdd-updater", status="ok",
-                  failed=None, log_path=logger.log_path)
+                  failed=("sdd-updater" if not sdd_ok else None),
+                  log_path=logger.log_path)
     return 0
 
 
-# ─── STATUS JSON (mejora 4) ────────────────────────────────────────────────────
+# ─── STATUS JSON ──────────────────────────────────────────────────────────
 def _write_status(project_path: str, last_step: str, status: str,
                   failed: str | None, log_path: str) -> None:
     """Escribe pipeline-status.json con el último paso completado, el estado y
@@ -1360,7 +1372,7 @@ def parse_args(argv: list[str]):
                         default=DEFAULT_CONTEXT_BUDGET_TOKENS,
                         help=f"Límite máximo de tokens para el contexto inyectado "
                              f"por agente (default {DEFAULT_CONTEXT_BUDGET_TOKENS}). "
-                             f"0 desactiva el recorte (mejora 2).")
+                             f"0 desactiva el recorte.")
     args = parser.parse_args(argv)
 
     if not args.objective and not args.objective_file:

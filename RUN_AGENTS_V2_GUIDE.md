@@ -204,7 +204,7 @@ que ya tienen su marker `<!-- AGENT_DONE: <agente> -->`.
 
 ### Saber en qué agente falló
 
-Cada corrida escribe `pipeline-status.json` en la raíz del proyecto (mejora 4):
+Cada corrida escribe `pipeline-status.json` en la raíz del proyecto:
 
 ```powershell
 # Ver la fase que falló y el log asociado
@@ -226,6 +226,16 @@ El script ejecuta 5 agentes en orden:
 4. @debugger       →  ← solo si tests fallan (hasta 3 reintentos)
 5. @sdd-updater    → documenta en docs/context/global.md
 ```
+
+Detalles del flujo:
+
+- **Re-detección de stack tras Coder:** el stack se vuelve a detectar después de
+  `@coder`. Si el Coder añadió un `package.json`, `pom.xml` o wrapper nuevo, el
+  Tester/Debugger usan el runner correcto en lugar del inicial detectado antes de
+  tocar código.
+- **Aviso de fallo de SDD-updater:** `@sdd-updater` no aborta el pipeline, pero si
+  no completa su fase se avisa en consola y se marca en `pipeline-status.json`
+  (`failed_step: "sdd-updater"`) — así sabes que el SDD puede estar desactualizado.
 
 Cada agente escribe su marker `<!-- AGENT_DONE: <agente> -->` al final del
 `.opencode-context.md`. El script los usa para saber si puede saltar al
@@ -306,7 +316,7 @@ python ~/scripts/run_agents_v2.py ~/proyecto "objetivo"
 | `OPENCODE_BIN` | Binario de opencode a usar (`.exe` directo en Windows, `opencode` en Unix) |
 | `OPENCODE_AGENTS_DIR` | Directorio de agentes `.md` especializados (default `~/.config/opencode/agents`) |
 | `OC_AGENT_TIMEOUT_<AGENTE>` | Timeout por agente en segundos (ej. `OC_AGENT_TIMEOUT_CODER=3600`) |
-| `OC_PRICE_IN_<MODELO>` / `OC_PRICE_OUT_<MODELO>` | Override del precio por M tokens para el reporte de costo (mejora 3) |
+| `OC_PRICE_IN_<MODELO>` / `OC_PRICE_OUT_<MODELO>` | Override del precio por M tokens para el reporte de costo |
 
 ## Troubleshooting
 

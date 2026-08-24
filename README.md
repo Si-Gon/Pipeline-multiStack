@@ -51,10 +51,12 @@ function Run-Pipeline { python C:\\WorkSpace\\Scritp-python\\run\_agents\_v2.py 
 1. **Backup** del contexto previo (nunca pisa trabajo sin copia)
 2. **Detecta el stack** del proyecto (Maven, pytest, npm, go, dotnet, frontend)
 3. Ejecuta la cadena de agentes, cada fase validada antes de avanzar
-4. **Valida** resultados reales (tests backend / Playwright headless frontend)
-5. Si los tests fallan, entra un **bucle Debugger** (hasta 3 reintentos con el error real)
-6. Actualiza la documentación (SDD) del proyecto
-7. Escribe el **log persistente** y el **reporte de costo estimado**
+4. **Re-detecta el stack** tras implementar — si el código añadió un runner nuevo
+   (package.json, pom.xml, wrapper), los tests usan el correcto
+5. **Valida** resultados reales (tests backend / Playwright headless frontend)
+6. Si los tests fallan, entra un **bucle Debugger** (hasta 3 reintentos con el error real)
+7. Actualiza la documentación (SDD) del proyecto — si no se completa, lo avisa
+8. Escribe el **log persistente**, el **pipeline-status.json** y el **reporte de costo estimado**
 
 ## Control de costos
 
@@ -73,7 +75,9 @@ function Run-Pipeline { python C:\\WorkSpace\\Scritp-python\\run\_agents\_v2.py 
 
 ## Documentación
 
-- **`RUN_AGENTS_V2_GUIDE.md`** — referencia completa del script: flags, stack, timeout, env vars, troubleshooting, historial.
+- **`README.md`** — presentación general y guía de adopción (este archivo).
+- **`CHANGELOG.md`** — historial de decisiones: **por qué** se implementó cada feature/fix, con nombre, fecha, motivo y cómo resuelve el problema.
+- **`RUN_AGENTS_V2_GUIDE.md`** — referencia completa del script: flags, stack, timeout, env vars, troubleshooting, historial técnico.
 
 ## Cómo crear los agentes
 
