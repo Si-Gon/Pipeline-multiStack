@@ -1651,7 +1651,12 @@ def _print_cli_help() -> None:
     print("  pipeline cost <proyecto>                      # factura estimada del último log")
     print("  pipeline help                                 # esta ayuda")
     print()
-    print("Flags de `run`/`resume`: --objective-file, --budget-inject, --mcp-minimal, --no-mcp-minimal")
+    print("Flags de `run`/`resume`:")
+    print("  --objective-file <archivo>  Lee el objetivo desde un archivo")
+    print("  --budget-inject <N>         Presupuesto de contexto por agente")
+    print("  --profile <perfil>          rápido | equilibrado | minucioso (F4)")
+    print("  --mcp-minimal               Deshabilita tools MCP globales")
+    print("  --no-mcp-minimal            Conserva los tools MCP globales")
     print("Subcomandos: run, resume, status, cost.")
 
 
