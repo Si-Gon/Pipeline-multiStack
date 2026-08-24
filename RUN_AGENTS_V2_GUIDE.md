@@ -26,11 +26,30 @@ function Run-Pipeline {
 ## Uso básico
 
 ```powershell
+# Instala el paquete (opcional; habilita el comando `pipeline` global)
+pip install -e C:\WorkSpace\Scritp-python
+
 # Objetivo corto (directo en línea de comandos)
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-proyecto "Implementar login con JWT"
+pipeline run C:\WorkSpace\mi-proyecto "Implementar login con JWT"
 
 # Objetivo largo desde archivo (recomendado para specs complejas)
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-proyecto --objective-file spec.md
+pipeline run C:\WorkSpace\mi-proyecto --objective-file spec.md
+
+# Retomar una corrida interrumpida
+pipeline resume C:\WorkSpace\mi-proyecto --objective-file spec.md
+
+# Consultar estado y costo de la última corrida
+pipeline status C:\WorkSpace\mi-proyecto
+pipeline cost C:\WorkSpace\mi-proyecto
+```
+
+> Nota: el comando posicional legacy (`pipeline <proyecto> "objetivo"` sin `run`)
+> quedó fuera en F3. Ahora es `pipeline run <proyecto> "objetivo"`.
+
+También puedes correr sin instalarlo desde la carpeta del script:
+
+```powershell
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\mi-proyecto "Implementar login con JWT"
 ```
 
 ## Forma recomendada: archivo de objetivo
@@ -40,7 +59,7 @@ backticks), usa `--objective-file` en vez de pasar texto en argv. Evita
 problemas de encoding/quoting:
 
 ```powershell
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\RPG-Frontend --objective-file objetivo-animaciones.md
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\RPG-Frontend --objective-file objetivo-animaciones.md
 ```
 
 El archivo se lee byte-for-byte desde la raíz del proyecto (ruta relativa
@@ -72,10 +91,10 @@ no baja del tope.
 
 ```powershell
 # Uso explícito (limitar agresivamente a 500 tok)
-python run_agents_v2.py C:\WorkSpace\mi-proyecto "objetivo" --budget-inject 500
+python run_agents_v2.py run C:\WorkSpace\mi-proyecto "objetivo" --budget-inject 500
 
 # Desactivar el recorte por completo
-python run_agents_v2.py C:\WorkSpace\mi-proyecto "objetivo" --budget-inject 0
+python run_agents_v2.py run C:\WorkSpace\mi-proyecto "objetivo" --budget-inject 0
 ```
 
 ## Reporte de costo estimado
@@ -132,7 +151,7 @@ esa fase**, en vez de reinventar a qué paso relanzar.
 ### Frontend HTML/JS/CSS vanilla
 
 ```powershell
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\RPG-Frontend --objective-file objetivo-animaciones.md
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\RPG-Frontend --objective-file objetivo-animaciones.md
 ```
 
 - **Stack detectado**: `html_playwright`
@@ -143,7 +162,7 @@ python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\RPG-Frontend --o
 ### Java/Maven
 
 ```powershell
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-servicio --objective-file tarea.md
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\mi-servicio --objective-file tarea.md
 ```
 
 - **Stack detectado**: `maven` (por `pom.xml`)
@@ -153,7 +172,7 @@ python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-servicio --ob
 ### Node.js (npm/pnpm/yarn)
 
 ```powershell
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-app --objective-file tarea.md
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\mi-app --objective-file tarea.md
 ```
 
 - **Stack detectado**: `npm`/`pnpm`/`yarn` (por `package.json` + lockfile)
@@ -163,7 +182,7 @@ python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-app --objecti
 ### Python/pytest
 
 ```powershell
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-proyecto --objective-file tarea.md
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\mi-proyecto --objective-file tarea.md
 ```
 
 - **Stack detectado**: `pytest` (por `pyproject.toml`/`requirements.txt` + archivos `test_*.py`)
@@ -172,7 +191,7 @@ python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-proyecto --ob
 ### Go
 
 ```powershell
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-servicio --objective-file tarea.md
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\mi-servicio --objective-file tarea.md
 ```
 
 - **Stack detectado**: `go` (por `go.mod`)
@@ -181,7 +200,7 @@ python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-servicio --ob
 ### .NET
 
 ```powershell
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\mi-servicio --objective-file tarea.md
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\mi-servicio --objective-file tarea.md
 ```
 
 - **Stack detectado**: `dotnet` (por `*.csproj`/`*.sln`)
@@ -196,7 +215,7 @@ Si el pipeline se cae a mitad (por timeout, error de red, cierre de terminal):
 Get-Content "C:\WorkSpace\RPG-Frontend\pipeline-artifacts\pipeline-*.log" -Tail 5
 
 # Relanzar con --resume para saltar agentes ya completados
-python C:\WorkSpace\Scritp-python\run_agents_v2.py C:\WorkSpace\RPG-Frontend --objective-file objetivo.md --resume
+python C:\WorkSpace\Scritp-python\run_agents_v2.py run C:\WorkSpace\RPG-Frontend --objective-file objetivo.md --resume
 ```
 
 `--resume` conserva `.opencode-context.md` existente y salta los agentes
@@ -300,13 +319,13 @@ Para otros sistemas, define la variable de entorno:
 ```bash
 # bash/zsh
 export OPENCODE_BIN="opencode"
-python ~/scripts/run_agents_v2.py ~/proyecto "objetivo"
+python ~/scripts/run_agents_v2.py run ~/proyecto "objetivo"
 ```
 
 ```powershell
 # PowerShell (cualquier SO)
 $env:OPENCODE_BIN = "opencode"
-python ~/scripts/run_agents_v2.py ~/proyecto "objetivo"
+python ~/scripts/run_agents_v2.py run ~/proyecto "objetivo"
 ```
 
 ### Variables de entorno soportadas

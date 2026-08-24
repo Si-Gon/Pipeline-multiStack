@@ -30,15 +30,31 @@ contexto inyectado para mantener los costos a raya.
 ## Quick start
 
 ```bash
-# 1. Objetivo corto (directo en argv)
-python run\_agents\_v2.py /ruta/a/mi-proyecto "Implementar login con JWT"
+# 1. Instala el paquete (desde el repo)
+pip install -e .
 
-# 2. Objetivo largo desde archivo (recomendado para specs — evita problemas de quoting)
-python run\_agents\_v2.py /ruta/a/mi-proyecto --objective-file spec.md
+# 2. Objetivo corto (directo en argv)
+pipeline run /ruta/a/mi-proyecto "Implementar login con JWT"
 
-# 3. Retomar una corrida interrumpida (salta agentes ya completados)
-python run\_agents\_v2.py /ruta/a/mi-proyecto --objective-file spec.md --resume
+# 3. Objetivo largo desde archivo (recomendado para specs — evita problemas de quoting)
+pipeline run /ruta/a/mi-proyecto --objective-file spec.md
+
+# 4. Retomar una corrida interrumpida (salta agentes ya completados)
+pipeline resume /ruta/a/mi-proyecto --objective-file spec.md
+
+# 5. Consultar estado y costo de la última corrida
+pipeline status /ruta/a/mi-proyecto
+pipeline cost /ruta/a/mi-proyecto
 ```
+
+También puedes correr el script directamente sin instalarlo:
+
+```bash
+python run_agents_v2.py run /ruta/a/mi-proyecto "Implementar login con JWT"
+```
+
+> Nota: la sintaxis es `pipeline run <proyecto> "objetivo"`. El comando posicional
+> legacy (`pipeline <proyecto> "objetivo"` sin `run`) quedó fuera en F3.
 
 Si usas PowerShell, define un alias para no escribir la ruta completa:
 

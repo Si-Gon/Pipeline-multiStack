@@ -1471,12 +1471,14 @@ def parse_args(argv: list[str]):
 
 def _print_cli_help() -> None:
     print("Uso del CLI `pipeline`:")
-    print("  pipeline <proyecto> \"objetivo\" [flags]   # corre el pipeline (legacy)")
-    print("  pipeline status <proyecto>               # estado de la última corrida")
-    print("  pipeline cost <proyecto>                 # factura estimada del último log")
-    print("  pipeline --help                          # flags detallados")
+    print("  pipeline run <proyecto> \"objetivo\" [flags]   # corre el pipeline")
+    print("  pipeline resume <proyecto> [flags]            # retoma la última corrida")
+    print("  pipeline status <proyecto>                    # estado de la última corrida")
+    print("  pipeline cost <proyecto>                      # factura estimada del último log")
+    print("  pipeline help                                 # esta ayuda")
     print()
-    print("Subcomandos de lectura (F3-a/F3-b): status, cost.")
+    print("Flags de `run`/`resume`: --objective-file, --budget-inject, --mcp-minimal, --no-mcp-minimal")
+    print("Subcomandos: run, resume, status, cost.")
 
 
 def _run_read_subcommand(cmd: str, rest: list[str]) -> None:
@@ -1496,24 +1498,32 @@ def _run_read_subcommand(cmd: str, rest: list[str]) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     """Punto de entrada del CLI. `argv` permite inyección para tests; si es
-    None, usa sys.argv[1:]. Convierte el antiguo bloque `__main__` en una
-    función llamable → habilita el entry point del paquete (`pipeline`)."""
+    None, usa sys.argv[1:]. Dispatch por subcomandos (F3): status/cost → por
+    lecturas; run/resume → ejecución del pipeline."""
     import atexit
     import traceback
 
     argv = sys.argv[1:] if argv is None else list(argv)
-    if not argv:
+    if not argv or argv[0] in ("help", "-h", "--help"):
         _print_cli_help()
-        sys.exit(2)
+        sys.exit(0 if argv and argv[0] in ("help", "-h", "--help") else 2)
 
-    # Dispatch de subcomandos (Opción A, F3). Si el primer token es un
-    # subcomando conocido, lo maneja; si no, cae al comportamiento legacy
-    # (pipeline <proyecto> "objetivo") que se migrará en F3-c.
     first = argv[0]
     if first in ("status", "cost"):
         _run_read_subcommand(first, argv[1:])
         return
-    proj, obj, resume, mcp_minimal, no_mcp_minimal, budget = parse_args(argv)
+    if first in ("run", "resume"):
+        # `run` → argv de ejecución tal cual; `resume` → fuerza el flag --resume.
+        if first == "resume":
+            exec_argv = (["--resume"] if "--resume" not in argv[1:] else []) + argv[1:]
+        else:
+            exec_argv = argv[1:]
+    else:
+        print(f"[ERROR] subcomando desconocido: {first!r}")
+        _print_cli_help()
+        sys.exit(2)
+
+    proj, obj, resume, mcp_minimal, no_mcp_minimal, budget = parse_args(exec_argv)
     abs_path = os.path.abspath(proj)
     if not os.path.exists(abs_path):
         print(f"[ERROR] La ruta no existe: {abs_path}")

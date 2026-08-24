@@ -21,11 +21,43 @@ def test_parse_args_resume_flag():
 
 
 def test_main_ruta_inexistente_sale_1(capsys):
-    """main() con una ruta que no existe debe imprimir error y salir(1)."""
+    """`pipeline run` con una ruta que no existe debe imprimir error y salir(1)."""
     import pytest
     with pytest.raises(SystemExit) as e:
-        R.main(["C:\\ruta\\que\\no\\existe\\xyz", "objetivo"])
+        R.main(["run", "C:\\\\ruta\\\\que\\\\no\\\\existe\\\\xyz", "objetivo"])
     assert e.value.code == 1
+
+
+def test_main_run_prefiere_subcomando():
+    """`pipeline run <proyecto> "objetivo"` resuelve el subcomando run."""
+    import pytest
+    with pytest.raises(SystemExit) as e:
+        R.main(["run", "C:\\\\ruta\\\\inexistente", "objetivo"])
+    assert e.value.code == 1  # llega a validación de ruta tras parsear run
+
+
+def test_main_resume_fuerza_flag():
+    """`pipeline resume <proyecto> "objetivo"` debe inyectar --resume al parsear."""
+    import pytest
+    with pytest.raises(SystemExit) as e:
+        R.main(["resume", "C:\\\\ruta\\\\inexistente", "objetivo"])
+    assert e.value.code == 1  # valida ruta tras parsear con --resume forzado
+
+
+def test_main_subcomando_desconocido_sale_2():
+    """Un primer token no reconocido imprime error y sale 2."""
+    import pytest
+    with pytest.raises(SystemExit) as e:
+        R.main(["fruta"])
+    assert e.value.code == 2
+
+
+def test_main_ayuda_sale_0():
+    """`pipeline help` imprime ayuda y sale 0."""
+    import pytest
+    with pytest.raises(SystemExit) as e:
+        R.main(["help"])
+    assert e.value.code == 0
 
 
 def test_main_invoca_argv_vacio_tipico():
