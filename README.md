@@ -9,10 +9,10 @@ resultado en un contexto compartido, con verificación robusta de que cada fase
 realmente terminó (markers + returncode), reintentos y un presupuesto de
 contexto inyectado para mantener los costos a raya.
 
-> ¿Por qué existe? La mayoría de soluciones "automatizan todo" de pago (\~$20/mes,
+> ¿Por qué existe? La mayoría de soluciones "automatizan todo" de pago (~$20/mes,
 > agentes opacos) no permiten controlar el gasto en tokens ni trazabilidad de lo
-> que pasó. Este pipeline apunta a lo contrario: \*\*control fino de costos + un
-> registro preciso de cada corrida\*\*.
+> que pasó. Este pipeline apunta a lo contrario: **control fino de costos + un
+> registro preciso de cada corrida**.
 
 ## Para quién es
 
@@ -23,7 +23,7 @@ contexto inyectado para mantener los costos a raya.
 ## Requisitos
 
 * **Python 3.10+**
-* **opencode** instalado y configurado (los agentes `.md` usan el directorio de agentes de tu \~/.config/opencode, o la env `OPENCODE\_AGENTS\_DIR`)
+* **opencode** instalado y configurado (los agentes `.md` usan el directorio de agentes de tu ~/.config/opencode, o la env `OPENCODE_AGENTS_DIR`)
 * **Node.js + npm** solo si validas frontend vanilla con Playwright headless
 * Un stack detectado entre: Maven/Gradle, pytest, npm/pnpm/yarn, go, dotnet, HTML/JS/CSS vanilla
 
@@ -59,7 +59,7 @@ python run_agents_v2.py run /ruta/a/mi-proyecto "Implementar login con JWT"
 Si usas PowerShell, define un alias para no escribir la ruta completa:
 
 ```powershell
-function Run-Pipeline { python C:\\WorkSpace\\Scritp-python\\run\_agents\_v2.py $args }
+function Run-Pipeline { python C:\WorkSpace\Scritp-python\run_agents_v2.py $args }
 ```
 
 ## Qué hace por cada corrida
@@ -68,7 +68,7 @@ function Run-Pipeline { python C:\\WorkSpace\\Scritp-python\\run\_agents\_v2.py 
 2. **Detecta el stack** del proyecto (Maven, pytest, npm, go, dotnet, frontend)
 3. Ejecuta la cadena de agentes, cada fase validada antes de avanzar
 4. **Re-detecta el stack** tras implementar — si el código añadió un runner nuevo
-   (package.json, pom.xml, wrapper), los tests usan el correcto
+(package.json, pom.xml, wrapper), los tests usan el correcto
 5. **Valida** resultados reales (tests backend / Playwright headless frontend)
 6. Si los tests fallan, entra un **bucle Debugger** (hasta 3 reintentos con el error real)
 7. Actualiza la documentación (SDD) del proyecto — si no se completa, lo avisa
@@ -81,7 +81,7 @@ function Run-Pipeline { python C:\\WorkSpace\\Scritp-python\\run\_agents\_v2.py 
 |`--mcp-minimal`|Deshabilita tool-schemas de MCP globales en cada request (ahorro por request)|
 |`--budget-inject <N>`|Presupuesto de tokens por agente para el contexto inyectado (default 9000; `0` lo desactiva)|
 |Reporte de costo|Factura estimada en USD por modelo al final de cada corrida|
-|Modelos por agente|Configurables en `AGENT\_MODELS` / `MODEL\_PRICING`|
+|Modelos por agente|Configurables en `AGENT_MODELS` / `MODEL_PRICING`|
 
 ## Señales de salida (para CI / wrappers)
 
@@ -91,9 +91,9 @@ function Run-Pipeline { python C:\\WorkSpace\\Scritp-python\\run\_agents\_v2.py 
 
 ## Documentación
 
-- **`README.md`** — presentación general y guía de adopción (este archivo).
-- **`CHANGELOG.md`** — historial de decisiones: **por qué** se implementó cada feature/fix, con nombre, fecha, motivo y cómo resuelve el problema.
-- **`RUN_AGENTS_V2_GUIDE.md`** — referencia completa del script: flags, stack, timeout, env vars, troubleshooting, historial técnico.
+* **`README.md`** — presentación general y guía de adopción (este archivo).
+* **`CHANGELOG.md`** — historial de decisiones: **por qué** se implementó cada feature/fix, con nombre, fecha, motivo y cómo resuelve el problema.
+* **`RUN_AGENTS_V2_GUIDE.md`** — referencia completa del script: flags, stack, timeout, env vars, troubleshooting, historial técnico.
 
 ## Cómo crear los agentes
 
@@ -102,20 +102,21 @@ El pipeline orquesta agentes opencode por ROL (`explorer`, `coder`, `tester`,
 agentes (default `~/.config/opencode/agents/`, o la env `OPENCODE_AGENTS_DIR`).
 
 Un agente tiene dos partes:
+
 1. **Frontmatter** — `description` (qué hace) y `mode: all`.
 2. **Cuerpo** — reglas de comportamiento + la **fase de cierre** (escribir su
-   sección en `.opencode-context.md` y el marker `<!-- AGENT_DONE: <rol> -->`).
+sección en `.opencode-context.md` y el marker `<!-- AGENT_DONE: <rol> -->`).
 
 ### Contrato que TODO agente debe cumplir
 
 Para que el orquestador funcione, sin importar el rol:
 
-- **Escribe su sección en `.opencode-context.md`** con lo hecho y un
-  `## Mensaje para el siguiente agente` accionable.
-- **Deja su marker** `<!-- AGENT_DONE: <rol> -->` en la ÚLTIMA línea.
-- **JAMÁS escribe el marker de otro agente** — cada agente solo el suyo.
-- **No leer** `.opencode-context.md` completo si el contexto viene inyectado
-  (ahorro de tokens) — usar `grep`/`read` con rango salvo verificación puntual.
+* **Escribe su sección en `.opencode-context.md`** con lo hecho y un
+`## Mensaje para el siguiente agente` accionable.
+* **Deja su marker** `<!-- AGENT_DONE: <rol> -->` en la ÚLTIMA línea.
+* **JAMÁS escribe el marker de otro agente** — cada agente solo el suyo.
+* **No leer** `.opencode-context.md` completo si el contexto viene inyectado
+(ahorro de tokens) — usar `grep`/`read` con rango salvo verificación puntual.
 
 ### Ejemplo 1 — `coder.md` (rol más usado, implementa código)
 
@@ -198,13 +199,13 @@ Solo escribes TU marker. JAMÁS el de otro agente.
 
 ### Roles requeridos por el pipeline
 
-| Rol | Qué hace | Ejecuta (por defecto) |
-|---|---|---|
-| `explorer` | Analiza stack + estructura, deja contexto | deepseek-v4-flash |
-| `coder` | Implementa el objetivo | qwen3.7-plus |
-| `tester` | Genera/valida pruebas | qwen3.7-plus |
-| `debugger` | Solo entra si fallan los tests (con el error real) | kimi-k2.7-code |
-| `sdd-updater` | Documenta el estado final | deepseek-v4-flash |
+|Rol|Qué hace|Ejecuta (por defecto)|
+|-|-|-|
+|`explorer`|Analiza stack + estructura, deja contexto|deepseek-v4-flash|
+|`coder`|Implementa el objetivo|qwen3.7-plus|
+|`tester`|Genera/valida pruebas|qwen3.7-plus|
+|`debugger`|Solo entra si fallan los tests (con el error real)|kimi-k2.7-code|
+|`sdd-updater`|Documenta el estado final|deepseek-v4-flash|
 
 ### Agentes especializados por stack (opcional)
 
@@ -237,6 +238,6 @@ Debugger → solo si los tests fallan (entra con el error real)
 SDD-Updater → documenta el estado del proyecto
 ```
 
-Cada agente deja un marker (`<!-- AGENT\_DONE: <agente> -->`) que el orquestador
+Cada agente deja un marker (`<!-- AGENT_DONE: <agente> -->`) que el orquestador
 usa para saber cuándo puede continuar y para retomar de forma segura con `--resume`.
 
