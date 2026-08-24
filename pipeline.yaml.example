@@ -31,3 +31,10 @@ runner:
 
 # Presupuesto de contexto inyectado por agente (tokens). Optional.
 # budget: 9000
+#
+# Perfiles de intención (F4-b): preselección de modelos + budget por nivel de
+# cuidado/costo. Se eligen con `--profile rapido|equilibrado|minucioso` en run/resume.
+#   rapido      → todos los modelos ligeros, budget bajo (más barato)
+#   equilibrado → los defaults (recomendado, default)
+#   minucioso   → modelos de mayor capacidad, budget alto (más análisis)
+# Un flag explícito --budget-inject gana sobre el perfil.

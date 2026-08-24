@@ -193,6 +193,57 @@ DEFAULT_CONTEXT_BUDGET_TOKENS = 9000
 # Cuando se recorta, cuántas líneas usar para los resúmenes de bloques viejos.
 BUDGET_EVICT_MAX_LINES = 8
 
+# ─── PERFILES DE INTENCIÓN (F4-b) ────────────────────────────────────────────
+# Preselección de modelos y budget por nivel de "cuidado/costo". Un usuario
+# no-LLM (o uno que no quiere elegir modelo a mano) elige un perfil y el
+# pipeline selecciona la combinación. Regla de precedencia (de mayor a menor):
+#   flag explícito (--budget-inject) > perfil > pipeline.yaml > default.
+# Un perfil solo sobreescribe los roles que define; el resto conserva su valor.
+PROFILES = {
+    "rapido": {
+        "label": "Rápido (más barato, menos análisis)",
+        "models": {
+            "explorer": DEFAULT_MODEL_FAST,
+            "coder":    DEFAULT_MODEL_FAST,
+            "tester":   DEFAULT_MODEL_FAST,
+            "debugger": DEFAULT_MODEL_FAST,
+            "sdd-updater": DEFAULT_MODEL_FAST,
+        },
+        "budget": 4000,
+    },
+    "equilibrado": {
+        "label": "Equilibrado (recomendado — default)",
+        "models": dict(DEFAULT_AGENT_MODELS),   # los defaults
+        "budget": DEFAULT_CONTEXT_BUDGET_TOKENS,
+    },
+    "minucioso": {
+        "label": "Minucioso (más análisis, más costoso)",
+        "models": {
+            "explorer": DEFAULT_MODEL_DEBUG,       # mejor modelo de lectura
+            "coder":    DEFAULT_MODEL_DEBUG,
+            "tester":   DEFAULT_MODEL_DEBUG,
+            "debugger": DEFAULT_MODEL_DEBUG,
+            "sdd-updater": DEFAULT_MODEL_DEBUG,
+        },
+        "budget": 12000,
+    },
+}
+DEFAULT_PROFILE = "equilibrado"
+
+
+def apply_profile(cfg: dict, profile: str) -> dict:
+    """Aplica un perfil a la config cargada (F4-b). Solo sobreescribe los roles
+    y el budget que define el perfil; el resto conserva su valor (el perfil se
+    combina con lo que venga de pipeline.yaml). Devuelve la config modificada."""
+    preset = PROFILES.get(profile)
+    if not preset:
+        return cfg
+    for role, model in preset["models"].items():
+        cfg["models"][role] = model
+    if "budget" in preset:
+        cfg["budget"] = preset["budget"]
+    return cfg
+
 # ─── PRECIOS DE MODELO ─────────────────────────────────────────────────────
 # Costo estimado por millón de tokens (USD), entrada/salida. Son estimaciones
 # razonables de los modelos default. Para modelos configurados por el usuario
@@ -1557,10 +1608,15 @@ def parse_args(argv: list[str]):
                         help="Evita la generación automática del config MCP-minimal "
                              "cuando el proyecto no tiene .opencode/opencode.json.")
     parser.add_argument("--budget-inject", dest="budget", type=int,
-                        default=DEFAULT_CONTEXT_BUDGET_TOKENS,
+                        default=None,
                         help=f"Límite máximo de tokens para el contexto inyectado "
                              f"por agente (default {DEFAULT_CONTEXT_BUDGET_TOKENS}). "
                              f"0 desactiva el recorte.")
+    parser.add_argument("--profile", dest="profile",
+                        default=DEFAULT_PROFILE,
+                        choices=list(PROFILES.keys()),
+                        help="Perfil de intención: rápido/equilibrado/minucioso. "
+                             "Preselecciona modelos y budget (F4-b).")
     args = parser.parse_args(argv)
 
     if not args.objective and not args.objective_file:
@@ -1583,7 +1639,8 @@ def parse_args(argv: list[str]):
 
     if not obj.strip():
         parser.error("El objetivo está vacío.")
-    return args.project, obj, args.resume, args.mcp_minimal, args.no_mcp_minimal, args.budget
+    return (args.project, obj, args.resume, args.mcp_minimal,
+            args.no_mcp_minimal, args.budget, args.profile)
 
 
 def _print_cli_help() -> None:
@@ -1640,15 +1697,21 @@ def main(argv: list[str] | None = None) -> None:
         _print_cli_help()
         sys.exit(2)
 
-    proj, obj, resume, mcp_minimal, no_mcp_minimal, budget = parse_args(exec_argv)
+    proj, obj, resume, mcp_minimal, no_mcp_minimal, budget_flag, profile = parse_args(exec_argv)
     abs_path = os.path.abspath(proj)
     if not os.path.exists(abs_path):
         print(f"[ERROR] La ruta no existe: {abs_path}")
         sys.exit(1)
 
-    # Creamos el logger aquí, antes de run(), para garantizar que exista
-    # incluso si run() revienta en su primera línea. Esto habilita que
-    # el `atexit` handler pueda escribir el resumen final SIEMPRE.
+    # F4-b: aplicar el perfil de intención a la config cacheada del proyecto
+    # (así run_agent/get_agent_model lo ven). Precedencia de budget:
+    #   flag explícito --budget-inject > perfil > pipeline.yaml.
+    cfg = load_pipeline_config(abs_path)
+    apply_profile(cfg, profile)
+    _config_cache[abs_path] = cfg
+    budget = budget_flag if budget_flag is not None else cfg["budget"]
+    print(f"  [PERFIL] {profile} — modelos: " +
+          ", ".join(f"{k}={v}" for k, v in cfg["models"].items()))
     _guard_logger = PipelineLogger(abs_path)
     _guard_logger.info(f"(guard) Logger preventivo creado. Proyecto: {abs_path}")
 

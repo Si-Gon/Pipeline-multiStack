@@ -3,11 +3,12 @@ import run_agents_v2 as R
 
 
 def test_parse_args_objetivo_corto():
-    proj, obj, resume, mcp, no_mcp, budget = R.parse_args(["mi-proyecto", "hacer login"])
+    proj, obj, resume, mcp, no_mcp, budget, profile = R.parse_args(["mi-proyecto", "hacer login"])
     assert proj == "mi-proyecto"
     assert obj == "hacer login"
     assert resume is False
-    assert budget == R.DEFAULT_CONTEXT_BUDGET_TOKENS
+    assert budget is None  # sin flag → budget_flag queda None (se resuelve con perfil/config)
+    assert profile == R.DEFAULT_PROFILE
 
 
 def test_parse_args_budget_personalizado():
@@ -18,6 +19,11 @@ def test_parse_args_budget_personalizado():
 def test_parse_args_resume_flag():
     args = R.parse_args(["mi-proyecto", "objetivo", "--resume"])
     assert args[2] is True
+
+
+def test_parse_args_profile():
+    args = R.parse_args(["mi-proyecto", "objetivo", "--profile", "rapido"])
+    assert args[6] == "rapido"
 
 
 def test_main_ruta_inexistente_sale_1(capsys):

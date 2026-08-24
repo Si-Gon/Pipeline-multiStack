@@ -70,3 +70,35 @@ class _FakeLogger:
 def test_get_model_pricing_default_para_desconocido():
     """Modelos no listados usan DEFAULT_PRICING."""
     assert R.get_model_pricing("modelo/desconocido") == R.DEFAULT_PRICING
+
+
+def test_apply_profile_rapido():
+    """El perfil 'rapido' sobreescribe todos los roles al modelo fast."""
+    cfg = {"models": dict(R.DEFAULT_AGENT_MODELS), "budget": R.DEFAULT_CONTEXT_BUDGET_TOKENS}
+    R.apply_profile(cfg, "rapido")
+    assert cfg["models"]["coder"] == R.DEFAULT_MODEL_FAST
+    assert cfg["budget"] == 4000
+
+
+def test_apply_profile_minucioso():
+    """El perfil 'minucioso' usa el modelo de debug para todos + budget alto."""
+    cfg = {"models": dict(R.DEFAULT_AGENT_MODELS), "budget": R.DEFAULT_CONTEXT_BUDGET_TOKENS}
+    R.apply_profile(cfg, "minucioso")
+    assert cfg["models"]["coder"] == R.DEFAULT_MODEL_DEBUG
+    assert cfg["models"]["tester"] == R.DEFAULT_MODEL_DEBUG
+    assert cfg["budget"] == 12000
+
+
+def test_apply_profile_equilibrado_default():
+    """El perfil 'equilibrado' conserva los modelos default."""
+    cfg = {"models": dict(R.DEFAULT_AGENT_MODELS), "budget": R.DEFAULT_CONTEXT_BUDGET_TOKENS}
+    R.apply_profile(cfg, "equilibrado")
+    assert cfg["models"]["coder"] == R.DEFAULT_MODEL_CODING
+    assert cfg["budget"] == R.DEFAULT_CONTEXT_BUDGET_TOKENS
+
+
+def test_apply_profile_inexistente_no_cambia():
+    """Un perfil desconocido se ignora (no rompe)."""
+    cfg = {"models": dict(R.DEFAULT_AGENT_MODELS), "budget": 5000}
+    R.apply_profile(cfg, "no-existe")
+    assert cfg["budget"] == 5000
