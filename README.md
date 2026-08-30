@@ -123,6 +123,7 @@ git** (quién lo hizo y cuándo), y nada depende de un proceso externo corriendo
 ### CLI del gate
 
 ```bash
+pipeline spec new     /ruta/a/mi-proyecto "Nombre spec"   # crea spec (5 archivos, score 89/A de arranque)
 pipeline spec status  /ruta/a/mi-proyecto          # verdict (open/blocked) + por spec
 pipeline spec score   /ruta/a/mi-proyecto [spec]   # score por spec (o todas)
 pipeline spec approve /ruta/a/mi-proyecto 2        # firma humana: aprueba la spec

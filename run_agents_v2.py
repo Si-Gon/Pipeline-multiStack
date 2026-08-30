@@ -87,8 +87,9 @@ try:
     from sdd import rubric as sdd_rubric
     from sdd import spec_format as sdd_spec_format
     from sdd import visual_anchors as sdd_visual
+    from sdd import spec_templates as sdd_templates
 except Exception:  # módulo ausente → el gate-check se desactiva con aviso
-    sdd_gate = sdd_rubric = sdd_spec_format = sdd_visual = None
+    sdd_gate = sdd_rubric = sdd_spec_format = sdd_visual = sdd_templates = None
 
 # ─── CARGA DE .env (config por entorno) ──────────────────────────────────────
 # Carga las variables del archivo `.env` ubicado JUNTO a este script (la raíz
@@ -1874,6 +1875,7 @@ def _print_cli_help() -> None:
     print("  --mcp-minimal               Deshabilita tools MCP globales")
     print("  --no-mcp-minimal            Conserva los tools MCP globales")
     print("Subcomandos: run, resume, status, cost, spec <verb>.")
+    print("  spec new <proyecto> <nombre>       crea una spec (bundle base 5 archivos)")
     print("  spec score <proyecto> [spec]   score de la(s) spec(s)")
     print("  spec approve <proyecto> <spec> aprueba una spec (firma humana)")
     print("  spec consent <proyecto> <spec> consiente implementación (abre el gate)")
@@ -1946,6 +1948,31 @@ def _run_spec_subcommand(rest: list[str]) -> None:
         stt = sdd_gate.get_spec_state(project_path, spec["id"])
         print(f"  ✓ {verb} → spec {spec['id']}: aprobada={stt['aprobada']} consentida={stt['consentida']} "
               f"verdict={stt['verdict']}")
+        return
+
+    if verb == "new":
+        if len(args) < 2:
+            print(f"  [ERROR] falta el nombre de la spec: pipeline spec new <proyecto> <nombre>")
+            sys.exit(2)
+        name = " ".join(args[1:])
+        if sdd_templates is None:
+            print("  [ERROR] módulo sdd/spec_templates no disponible")
+            sys.exit(1)
+        try:
+            r = sdd_templates.create_spec(project_path, name)
+        except FileExistsError as e:
+            print(f"  [ERROR] {e}")
+            sys.exit(1)
+        except ValueError as e:
+            print(f"  [ERROR] {e}")
+            sys.exit(1)
+        print(f"  ✓ spec creada: {r['id']}")
+        print(f"    dir: {r['dir']}")
+        print(f"    archivos: {', '.join(r['files'])}")
+        # mostrar score preliminar del bundle mínimo
+        score = sdd_rubric.score_spec_dir(r["dir"]) if sdd_rubric else {}
+        if score:
+            print(f"    score preliminar del bundle: {score['score']} ({score['grade']})")
         return
 
     if verb == "status":
