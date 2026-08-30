@@ -86,8 +86,9 @@ try:
     from sdd import gate as sdd_gate
     from sdd import rubric as sdd_rubric
     from sdd import spec_format as sdd_spec_format
+    from sdd import visual_anchors as sdd_visual
 except Exception:  # módulo ausente → el gate-check se desactiva con aviso
-    sdd_gate = sdd_rubric = sdd_spec_format = None
+    sdd_gate = sdd_rubric = sdd_spec_format = sdd_visual = None
 
 # ─── CARGA DE .env (config por entorno) ──────────────────────────────────────
 # Carga las variables del archivo `.env` ubicado JUNTO a este script (la raíz
@@ -1348,6 +1349,104 @@ def apply_mcp_minimal(project_path: str, logger: PipelineLogger) -> None:
     print(msg)
 
 
+# ─── VISUAL DIFF ESTRUCTURAL (mejora #1 — maqueta→producto, Opción B) ─────────
+def _visual_check(project_path: str, logger: PipelineLogger) -> dict:
+    """Verifica que la estructura de la MAQUETA esté presente en el producto.
+
+    NO compara píxeles (falsos negativos: maqueta estática vs producto dinámico).
+    Extrae anclas estructurales de mockups/*.html (vía sdd/visual_anchors) y
+    verifica, con Playwright headless, que existan en el DOM renderizado de
+    index.html (servido por http-server). Genera pipeline-artifacts/visual-report.json
+    + screenshot. Es reporte (no aborta: la cobertura es información, no gate).
+
+    Returns: dict con coverage/found/total + rutas del reporte y screenshot.
+    """
+    import glob
+    mockups = sorted(glob.glob(os.path.join(project_path, "mockups", "*.html")))
+    if not mockups:
+        logger.info("[VISUAL] sin maqueta en mockups/ — se omite el diff estructural.")
+        return {"enabled": False, "reason": "no mockups"}
+    maqueta = mockups[0]
+    try:
+        with open(maqueta, encoding="utf-8") as f:
+            anchors = sdd_visual.extract_anchors(f.read())
+    except Exception as e:
+        logger.warn(f"[VISUAL] no se pudo leer la maqueta {maqueta}: {e}")
+        return {"enabled": False, "reason": str(e)}
+    if not anchors["structural"]:
+        logger.info("[VISUAL] la maqueta no tiene anclas estructurales detectables.")
+        return {"enabled": False, "reason": "sin anclas en maqueta"}
+
+    # Servir el producto con http-server (mismo patrón que el runner de tests)
+    try:
+        server = subprocess.Popen(
+            ["npx", "-y", "http-server", "-p", "0", "--cors", "-c-1", "."],
+            cwd=project_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, shell=True, stdin=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        return {"enabled": False, "reason": f"no se pudo iniciar http-server: {e}"}
+    port = None
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        line = server.stdout.readline()
+        if not line:
+            time.sleep(0.3)
+            continue
+        m = re.search(r"(?:127\.0\.0\.1|localhost):(\d+)", line)
+        if m:
+            port = m.group(1)
+            break
+    if not port:
+        server.terminate()
+        return {"enabled": False, "reason": "http-server no reportó puerto"}
+    url = f"http://localhost:{port}/"
+
+    # Playwright en caché persistente (mismo que el runner de tests)
+    cache_root = os.path.join(os.path.expanduser("~"), ".opencode", "playwright-cache")
+    os.makedirs(cache_root, exist_ok=True)
+    pw_module = os.path.join(cache_root, "node_modules", "playwright")
+    if not os.path.isdir(pw_module):
+        logger.info("[VISUAL] instalando playwright en caché persistente (1a vez)")
+        pkg_json = os.path.join(cache_root, "package.json")
+        with open(pkg_json, "w", encoding="utf-8") as f:
+            f.write('{"name":"pipeline-pw-check","version":"1.0.0","private":true}')
+        subprocess.run(["npm", "i", "playwright", "--no-save", "--silent"],
+                       cwd=cache_root, capture_output=True, text=True, shell=True, timeout=180)
+
+    artifacts = os.path.join(project_path, "pipeline-artifacts")
+    os.makedirs(artifacts, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    report_path = os.path.join(artifacts, f"visual-report-{ts}.json")
+    shot_path = os.path.join(artifacts, f"visual-shot-{ts}.png")
+    script_path = os.path.join(cache_root, "visual_check.cjs")
+    with open(script_path, "w", encoding="utf-8") as f:
+        f.write(sdd_visual.build_check_script(anchors["structural"], report_path, shot_path))
+
+    res = subprocess.run(["node", script_path, url, report_path, shot_path],
+                         capture_output=True, text=True, timeout=90)
+    try:
+        server.terminate()
+    except Exception:
+        pass
+
+    report = None
+    if os.path.exists(report_path):
+        try:
+            with open(report_path, encoding="utf-8") as f:
+                report = json.load(f)
+        except Exception:
+            report = None
+    if not report:
+        return {"enabled": True, "error": (res.stderr or res.stdout or "")[-600:],
+                "reason": "playwright no generó reporte"}
+
+    report["maqueta"] = maqueta
+    report["maqueta_anchors"] = anchors["structural"]
+    logger.info(f"[VISUAL] cobertura estructural: {report.get('coverage')}% "
+                f"({report.get('found')}/{report.get('total')} anclas) — {os.path.basename(maqueta)}")
+    return {"enabled": True, **report, "report_path": report_path}
+
 # ─── FLUJO PRINCIPAL ───────────────────────────────────────────────────────────
 def _detect_spec_num(objective: str) -> str:
     """Extrae el número de spec del objetivo (p.ej. 'Especificación 002 - ...').
@@ -1517,8 +1616,70 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
     if loops >= MAX_DEBUG_LOOPS:
         logger.warn(f"Alcanzado MAX_DEBUG_LOOPS={MAX_DEBUG_LOOPS}. Pipeline continúa pero tests siguen fallando.")
 
+    # 4b. GATE VISUAL (mejora #1, Opción B) — cobertura estructural maqueta→producto.
+    # Híbrido: ≥85% OK · 60–84% un reintento de @coder con el reporte de faltantes ·
+    # <60% o sigue baja tras reintentar → documentar (sin quemar tokens).
+    visual_result = None
+    visual_action = "disabled"
+    try:
+        if sdd_visual is not None:
+            v = _visual_check(abs_path, logger)
+            if v.get("enabled"):
+                cov = v.get("coverage", 0)
+                if cov >= 85:
+                    visual_action = "ok"
+                    logger.info(f"[VISUAL] cobertura {cov}% ≥85 — OK estructural.")
+                    print(f"  [VISUAL] cobertura estructural {cov}% ({v.get('found')}/{v.get('total')}) — OK")
+                elif cov >= 60:
+                    # Reintento-1 de @coder con el reporte de anclas faltantes.
+                    missing = [r["selector"] for r in v.get("results", []) if not r.get("found")]
+                    fix_obj = build_agent_objective(abs_path, "coder", objective, budget=budget)
+                    fix_obj += (f"\n\n=== GATE VISUAL: la maqueta pide estructura que el producto no tiene ===\n"
+                                f"Cobertura {cov}% ({v.get('found')}/{v.get('total')}). Anclas sin presencia: "
+                                f"{', '.join(missing) or 'ninguna listada'}.\n"
+                                f"Revisa mockups/ e index.html/src y RENDEZCA las anclas faltantes "
+                                f"(si son tags semánticos header/nav/aside/main/footer/article/section, "
+                                f"asegúrate de que estén en el DOM renderizado, no solo en HTML estático).\n"
+                                f"=== FIN GATE VISUAL ===\n")
+                    logger.warn(f"[VISUAL] cobertura {cov}% (60-84) — reintento-1 de @coder.")
+                    ok_fix = run_agent_with_verification("coder", abs_path, fix_obj, logger,
+                                                         invoke_as=resolve_agent("coder", stack["runner"]))
+                    if ok_fix:
+                        strip_foreign_markers("coder", abs_path, trusted_initial, logger)
+                        v2 = _visual_check(abs_path, logger)
+                        cov2 = v2.get("coverage", 0) if v2.get("enabled") else 0
+                        visual_action = "retry-ok" if cov2 >= 85 else "document"
+                        logger.info(f"[VISUAL] tras reintento: {cov2}% → {'OK' if visual_action=='retry-ok' else 'se documenta'}.")
+                        print(f"  [VISUAL] tras reintento de @coder: cobertura {cov2}% ({v2.get('found')}/{v2.get('total')})")
+                        visual_result = v2
+                    else:
+                        visual_action = "document"
+                        logger.warn("[VISUAL] @coder no pudo corregir en el reintento; se documenta.")
+                        print("  [VISUAL] @coder no corrigió en el reintento — se documenta lo que falta.")
+                else:
+                    visual_action = "document"
+                    missing = [r["selector"] for r in v.get("results", []) if not r.get("found")]
+                    logger.warn(f"[VISUAL] cobertura {cov}% <60 — SDD documentará lo que falta.")
+                    print(f"  [VISUAL] cobertura estructural {cov}% (<60). Se documenta lo que falta "
+                          f"(no se queman tokens). Faltan: {', '.join(missing) or 'ninguno'}.")
+                if visual_result is None:
+                    visual_result = v
+            else:
+                logger.info(f"[VISUAL] omisión por razon: {v.get('reason', '?')}")
+    except Exception as e:
+        logger.warn(f"[VISUAL] gate visual omitido por error: {e}")
+        print(f"  [AVISO] gate visual omitido (no bloquea): {e}")
+
     # 5. SDD-Updater (no abortamos si falla, pero ahora SÍ lo informamos)
     sdd_obj = build_agent_objective(abs_path, "sdd-updater", objective, budget=budget)
+    if visual_result is not None and visual_action and visual_result.get("enabled"):
+        # pasar cobertura al sdd-updater para que la documente
+        sdd_obj += (f"\n\n=== GATE VISUAL (ingreso del pipeline) ===\n"
+                    f"Acción: {visual_action}. Cobertura estructural vs maqueta: "
+                    f"{visual_result.get('coverage')}% ({visual_result.get('found')}/{visual_result.get('total')}).\n"
+                    f"Documenta en el SDD qué anclas faltan si aplica (reporte en "
+                    f"{os.path.basename(visual_result.get('report_path','')) if visual_result.get('report_path') else 'pipeline-artifacts/visual-report-*.json'}).\n"
+                    f"=== FIN GATE VISUAL ===\n")
     sdd_ok = step("sdd-updater", sdd_obj, "sdd-updater")
     if not sdd_ok:
         logger.warn("Sdd-updater no completó su fase; el SDD puede estar desactualizado.")

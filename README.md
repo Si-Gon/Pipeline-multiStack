@@ -144,6 +144,20 @@ El agente que implementa **no es quien aprueba**: la aprobación + el consentimi
 son firmas humanas en `gate.json`. Esto acopla el gate al pipeline (ya no son servicios
 independientes) y evita implementar sobre una spec sin autorizar.
 
+### Gate visual (diff estructural maqueta→producto)
+
+Al cierre, el pipeline verifica que el producto conserve la **estructura semántica**
+de la maqueta (tags HTML estándar: header/nav/main/aside/footer/article/section...),
+no los píxeles ni los datos. Genera `pipeline-artifacts/visual-report-*.json` + screenshot.
+
+Lógica híbrida (sin quemar tokens):
+- **≥85%** de anclas presentes → OK.
+- **60–84%** → 1 reintento de `@coder` con el reporte de anclas faltantes; se re-mide.
+- **<60%** (o sigue baja tras reintentar) → se **documenta** lo que falta en el SDD
+  (revisión humana), sin más tokens.
+
+La UI y `/api/visual` del bridge muestran la cobertura (ej. `91% · 10 de 11 anclas · OK`).
+
 ## Señales de salida (para CI / wrappers)
 
 * **Exit code** indica la fase que falló: `2` explorer · `3` coder · `4` tester · `5` debugger · `6` sdd-updater · `10` gate (LOCK) · `0` éxito.
