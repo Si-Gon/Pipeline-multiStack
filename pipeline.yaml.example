@@ -10,8 +10,8 @@
 # Modelos por rol (rol: nombre-modelo). Opcional — defaults si se omite.
 models:
   # explorer:    opencode-go/deepseek-v4-flash      # (default — rápido, análisis)
-  # coder:       opencode-go/qwen3.7-plus           # (default — código)
-  # tester:      opencode-go/qwen3.7-plus           # (default — pruebas)
+  # coder:       opencode-go/qwen3.8-flash           # (default — código)
+  # tester:      opencode-go/qwen3.8-flash           # (default — pruebas)
   # debugger:    opencode-go/kimi-k2.7-code         # (default — debug)
   # sdd-updater: opencode-go/deepseek-v4-flash      # (default — documentación)
   #

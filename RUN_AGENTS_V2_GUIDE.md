@@ -105,7 +105,7 @@ modelo** (entrada/salida), usando los precios de `MODEL_PRICING`:
 ```
 [COSTO ESTIMADO] por modelo (USD):
   opencode-go/deepseek-v4-flash  in~ 5000 out~ 2000 → $0.0033
-  opencode-go/qwen3.7-plus       in~12000 out~ 3000 → $0.0216
+  opencode-go/qwen3.8-flash       in~12000 out~ 3000 → $0.0032
   TOTAL                                             → $0.0249
 ```
 
@@ -308,8 +308,8 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.opencode\playwright-cache"
 | Agente | Modelo | Propósito |
 |---|---|---|
 | explorer | opencode-go/deepseek-v4-flash | Rápido, análisis |
-| coder | opencode-go/qwen3.7-plus | Código directo |
-| tester | opencode-go/qwen3.7-plus | Pruebas |
+| coder | opencode-go/qwen3.8-flash | Código directo |
+| tester | opencode-go/qwen3.8-flash | Pruebas |
 | debugger | opencode-go/kimi-k2.7-code | Debug reactivo |
 | sdd-updater | opencode-go/deepseek-v4-flash | Documentación |
 

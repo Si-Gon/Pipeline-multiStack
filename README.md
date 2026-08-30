@@ -278,8 +278,8 @@ Solo escribes TU marker. JAMÁS el de otro agente.
 |Rol|Qué hace|Ejecuta (por defecto)|
 |-|-|-|
 |`explorer`|Analiza stack + estructura, deja contexto|deepseek-v4-flash|
-|`coder`|Implementa el objetivo|qwen3.7-plus|
-|`tester`|Genera/valida pruebas|qwen3.7-plus|
+|`coder`|Implementa el objetivo|qwen3.8-flash|
+|`tester`|Genera/valida pruebas|qwen3.8-flash|
 |`debugger`|Solo entra si fallan los tests (con el error real)|kimi-k2.7-code|
 |`sdd-updater`|Documenta el estado final|deepseek-v4-flash|
 

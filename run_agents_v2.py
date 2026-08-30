@@ -113,7 +113,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 # Defaults cuando NO hay pipeline.yaml en el proyecto. Un usuario puede
 # sobreescribir por proyecto con `pipeline.yaml` (ver load_pipeline_config).
 DEFAULT_MODEL_FAST   = "opencode-go/deepseek-v4-flash"
-DEFAULT_MODEL_CODING = "opencode-go/qwen3.7-plus"
+DEFAULT_MODEL_CODING = "opencode-go/qwen3.8-flash"
 DEFAULT_MODEL_DEBUG  = "opencode-go/kimi-k2.7-code"
 DEFAULT_MODEL_LOCAL  = "ollama/qwen3-coder:30b"   # modelo local vía Ollama
 
@@ -266,7 +266,7 @@ def apply_profile(cfg: dict, profile: str) -> dict:
 MODEL_PRICING = {
     # (in $/M tok, out $/M tok) — claves por default
     DEFAULT_MODEL_FAST:   (0.25, 1.00),   # deepseek-v4-flash (económico)
-    DEFAULT_MODEL_CODING: (1.20, 2.40),   # qwen3.7-plus
+    DEFAULT_MODEL_CODING: (0.15, 0.47),   # qwen3.8-flash (in $0.15 / out $0.47 por M tok)
     DEFAULT_MODEL_DEBUG:  (1.00, 2.00),   # kimi-k2.7-code
     DEFAULT_MODEL_LOCAL:  (0.00, 0.00),   # ollama local — gratis
 }
