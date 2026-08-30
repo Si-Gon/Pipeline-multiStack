@@ -128,7 +128,21 @@ relance directo al paso que falló:
 | 4 | tester |
 | 5 | debugger |
 | 6 | sdd-updater |
+| 10 | gate (LOCK) — spec no aprobada y/o no consentida |
 | 0 | éxito completo |
+
+### Estado local del SDD (gate) — archivos JSON versionables
+
+El "SDD builder" no es un servidor ni una base de datos: es un módulo local del
+pipeline que lee/escribe **archivos planos** dentro del proyecto, legibles y
+versionables en git:
+
+- **`spec/specs/NNN-slug/`** — las specs (carpetas con `spec.md`, `plan.md`, ...).
+- **`spec/.sdd/gate.json`** — el estado de decisión por spec: `aprobada`,
+  `consentida`, `score`, `grade`. Como una "tabla de aprobaciones" en texto.
+
+Ventaja de que sea archivo (y no BD binaria): cada `approve`/`consent` queda en el
+historial git (auditoría de la firma humana) y no hay procesos externos que levantar.
 
 Además escribe `pipeline-status.json` en la raíz del proyecto con el último paso
 completado, la fase que falló, el log y el timestamp. Ejemplo:

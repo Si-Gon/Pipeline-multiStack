@@ -83,9 +83,70 @@ function Run-Pipeline { python C:\WorkSpace\Scritp-python\run_agents_v2.py $args
 |Reporte de costo|Factura estimada en USD por modelo al final de cada corrida|
 |Modelos por agente|Configurables en `AGENT_MODELS` / `MODEL_PRICING`|
 
+## SDD builder propio (gate + score + lock) — módulo `sdd/`
+
+Desde v2.5 (2026-08-29), el pipeline incluye un **SDD builder propio** como módulo
+(`sdd/`), que reemplaza la dependencia al MCP externo `@juanklagos/sdd-mcp`:
+minimal, sin servidor, con **gate y LOCK nativos**.
+
+### Modelo de estado: archivos locales versionables (no una base de datos)
+
+Todo el estado del SDD vive en **archivos planos dentro del proyecto**, no en un
+servidor ni en una BD externa. Son legibles por humanos y versionables en git:
+
+- **`spec/specs/NNN-slug/`** — las specs en sí (carpetas con `spec.md`, `plan.md`,
+  `tasks.md`, `research.md`, `history.md`).
+- **`spec/.sdd/gate.json`** — el índice de decisión: por cada spec, si está
+  `aprobada` y/o `consentida`, más su `score`/`grade`. Es el equivalente a una
+  "tabla de aprobaciones", pero en JSON de texto.
+
+Ejemplo mínimo de `gate.json`:
+```json
+{
+  "specs": {
+    "1": {"aprobada": true, "consentida": true, "score": 89, "grade": "A"},
+    "2": {"aprobada": true, "consentida": true, "score": 89, "grade": "A"}
+  }
+}
+```
+
+Al ser archivos, cada aprobación/consentimiento queda **registrado en el historial
+git** (quién lo hizo y cuándo), y nada depende de un proceso externo corriendo.
+
+### Componentes del módulo `sdd/`
+
+- **`sdd/gate.py`** — lee/escribe `gate.json`: estado `aprobada`/`consentida` + `locked`.
+- **`sdd/rubric.py`** — score determinista de la spec (max 89, port de `sdd-spec-scoring`;
+  paridad verificada: 89/A).
+- **`sdd/spec_format.py`** — lectura mínima de `spec/specs/NNN-slug/` (sin templates de scaffolding).
+
+### CLI del gate
+
+```bash
+pipeline spec status  /ruta/a/mi-proyecto          # verdict (open/blocked) + por spec
+pipeline spec score   /ruta/a/mi-proyecto [spec]   # score por spec (o todas)
+pipeline spec approve /ruta/a/mi-proyecto 2        # firma humana: aprueba la spec
+pipeline spec consent /ruta/a/mi-proyecto 2        # autoriza implementación
+```
+
+### LOCK nativo (regla de oro del SDD)
+
+`pipeline run` consulta el gate ANTES de lanzar agentes. Si la spec objetivo
+(derivada del `--objective-file` en `spec/specs/NNN-*/spec.md`) no está
+**aprobada Y consentida**, ABORTA con `exit 10` y mensaje `[LOCK]`:
+
+```
+[LOCK] No se implementa sobre spec no autorizada: ...
+Corre antes: pipeline spec approve ...  y  pipeline spec consent ...
+```
+
+El agente que implementa **no es quien aprueba**: la aprobación + el consentimiento
+son firmas humanas en `gate.json`. Esto acopla el gate al pipeline (ya no son servicios
+independientes) y evita implementar sobre una spec sin autorizar.
+
 ## Señales de salida (para CI / wrappers)
 
-* **Exit code** indica la fase que falló: `2` explorer · `3` coder · `4` tester · `5` debugger · `6` sdd-updater · `0` éxito.
+* **Exit code** indica la fase que falló: `2` explorer · `3` coder · `4` tester · `5` debugger · `6` sdd-updater · `10` gate (LOCK) · `0` éxito.
 * **`pipeline-status.json`** en la raíz del proyecto con el último paso completado, la fase que falló y el log.
 * **Log** persistente en `pipeline-artifacts/pipeline-<timestamp>.log`.
 
