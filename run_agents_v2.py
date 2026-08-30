@@ -1877,8 +1877,8 @@ def _print_cli_help() -> None:
     print("Subcomandos: run, resume, status, cost, spec <verb>.")
     print("  spec new <proyecto> <nombre>       crea una spec (bundle base 5 archivos)")
     print("  spec score <proyecto> [spec]   score de la(s) spec(s)")
-    print("  spec approve <proyecto> <spec> aprueba una spec (firma humana)")
-    print("  spec consent <proyecto> <spec> consiente implementación (abre el gate)")
+    print("  spec approve <proyecto> <spec> [--por <autor>] aprueba una spec (firma humana)")
+    print("  spec consent <proyecto> <spec> [--por <autor>] consiente implementación (abre el gate)")
     print("  spec status <proyecto>         estado del gate (aprobada/consentida/locked)")
 
 
@@ -1935,19 +1935,32 @@ def _run_spec_subcommand(rest: list[str]) -> None:
 
     if verb in ("approve", "consent"):
         if len(args) < 2:
-            print(f"  [ERROR] falta el id de la spec: pipeline spec {verb} <proyecto> <spec>")
+            print(f"  [ERROR] falta el id de la spec: pipeline spec {verb} <proyecto> <spec> [--por <autor>]")
             sys.exit(2)
         spec = sdd_spec_format.resolve_spec_by_input(project_path, args[1])
         if not spec:
             print(f"  [ERROR] spec no encontrada: {args[1]}")
             sys.exit(1)
+        # quién autoriza: --por <nombre> o pregunta interactiva
+        autor = None
+        if "--por" in args:
+            i = args.index("--por")
+            autor = args[i + 1] if i + 1 < len(args) else None
+        if not autor:
+            try:
+                autor = input(f"  ¿quién autoriza (nombre)? ").strip()
+            except EOFError:
+                autor = ""
+        if not autor:
+            print("  [ERROR] se requiere el nombre de quien autoriza (--por <autor> o respóndelo)")
+            sys.exit(1)
         if verb == "approve":
-            sdd_gate.approve(project_path, spec["id"])
+            sdd_gate.approve(project_path, spec["id"], autor=autor)
         else:
-            sdd_gate.consent(project_path, spec["id"])
+            sdd_gate.consent(project_path, spec["id"], autor=autor)
         stt = sdd_gate.get_spec_state(project_path, spec["id"])
-        print(f"  ✓ {verb} → spec {spec['id']}: aprobada={stt['aprobada']} consentida={stt['consentida']} "
-              f"verdict={stt['verdict']}")
+        print(f"  ✓ {verb} por {autor} → spec {spec['id']}: aprobada={stt['aprobada']} "
+              f"consentida={stt['consentida']} verdict={stt['verdict']}")
         return
 
     if verb == "new":

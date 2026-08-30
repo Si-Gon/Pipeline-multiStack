@@ -151,14 +151,11 @@ def _research_md(name: str, slug: str) -> str:
 
 
 def _history_md(name: str, slug: str) -> str:
-    return f"""# History - {name}
+    return f"""# Change history / Historial de cambios
 
-## 2026-08-30 - v0.1
-
-### Added
-- Spec inicial generada: {slug}
-### Why
-- Arranque de la especificación {name}.
+| Date / Fecha | Change type / Tipo de cambio | Summary / Resumen | Files impacted / Archivos impactados | Owner / Responsable |
+|---|---|---|---|---|
+| 2026-08-30 | Scope / Alcance | Spec inicial creada: {name} | `spec.md`, `plan.md`, `tasks.md`, `research.md`, `history.md` | silvio |
 """
 
 

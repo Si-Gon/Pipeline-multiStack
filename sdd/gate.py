@@ -48,13 +48,19 @@ def _spec_entry(gate: dict, spec_id: str) -> dict:
 
 
 def set_state(project_root: str, spec_id: str, *, aprobada=None, consentida=None,
-              score=None, grade=None) -> dict:
+              score=None, grade=None, autor=None) -> dict:
     gate = load_gate(project_root)
     e = _spec_entry(gate, spec_id)
     if aprobada is not None:
         e["aprobada"] = bool(aprobada)
+        if aprobada:
+            e["aprobada_por"] = autor or e.get("aprobada_por", "sin_autor")
+            e["aprobada_fecha"] = _today()
     if consentida is not None:
         e["consentida"] = bool(consentida)
+        if consentida:
+            e["consentida_por"] = autor or e.get("consentida_por", "sin_autor")
+            e["consentida_fecha"] = _today()
     if score is not None:
         e["score"] = score
     if grade is not None:
@@ -63,12 +69,19 @@ def set_state(project_root: str, spec_id: str, *, aprobada=None, consentida=None
     return gate
 
 
-def approve(project_root: str, spec_id: str) -> dict:
-    return set_state(project_root, spec_id, aprobada=True)
+def _today() -> str:
+    from datetime import date
+    return date.today().isoformat()
 
 
-def consent(project_root: str, spec_id: str) -> dict:
-    return set_state(project_root, spec_id, consentida=True)
+def approve(project_root: str, spec_id: str, autor: str = None) -> dict:
+    """Firma humana de aprobación. `autor` es QUIÉN aprueba (obligatorio para auditar)."""
+    return set_state(project_root, spec_id, aprobada=True, autor=autor)
+
+
+def consent(project_root: str, spec_id: str, autor: str = None) -> dict:
+    """Firma humana de consentimiento para implementar. `autor` = quién lo autoriza."""
+    return set_state(project_root, spec_id, consentida=True, autor=autor)
 
 
 def get_spec_state(project_root: str, spec_id: str) -> dict:
@@ -86,6 +99,8 @@ def get_spec_state(project_root: str, spec_id: str) -> dict:
         "verdict": "open" if (aprobada and consentida) else "blocked",
         "score": e.get("score"),
         "grade": e.get("grade"),
+        "aprobada_por": e.get("aprobada_por"),
+        "consentida_por": e.get("consentida_por"),
     }
 
 
@@ -105,6 +120,8 @@ def gate_summary(project_root: str) -> dict:
             "locked": not (aprobada and consentida),
             "score": e.get("score"),
             "grade": e.get("grade"),
+            "aprobada_por": e.get("aprobada_por"),
+            "consentida_por": e.get("consentida_por"),
         })
     n_aprob = sum(1 for s in out if s["aprobada"])
     n_cons = sum(1 for s in out if s["consentida"])
