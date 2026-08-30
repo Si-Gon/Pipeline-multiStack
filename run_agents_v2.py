@@ -1254,50 +1254,47 @@ def run_agent_with_verification(agent: str, project_path: str, objective: str,
     y escribió su marker. Si tras la corrida el marker aparece, aceptamos
     el resultado sin importar el rc (defensa en profundidad).
     """
-    rc = run_agent(agent, project_path, objective, logger, invoke_as=invoke_as)
+    # PLAYWRIGHT SOLO PARA EL TESTER: se habilita mientras corre el teskter y
+    # se restaura el estado previo al terminar. Sin él, el tester escribe los
+    # tests pero NO puede ejecutarlos en un navegador (hallazgo E2E 2026-08-30).
+    _pw_prev = set_project_mcp(project_path, "playwright", True) if agent == "tester" else None
+    try:
+        rc = run_agent(agent, project_path, objective, logger, invoke_as=invoke_as)
 
-    marker_present = agent_done(agent, project_path)
-    rc_ok = (rc == 0)
+        marker_present = agent_done(agent, project_path)
+        rc_ok = (rc == 0)
 
-    if rc_ok and marker_present:
-        logger.info(f"@{agent} OK (returncode=0 + marker presente).")
-        return True
+        if rc_ok and marker_present:
+            logger.info(f"@{agent} OK (returncode=0 + marker presente).")
+            return True
 
-    # Caso Windows-típico (rc spurio =1): el agente escribió su marker pero
-    # el wrapper .cmd reportó rc=1. Confiamos en el marker.
-    if marker_present and not rc_ok:
-        logger.warn(
-            f"@{agent} rc={rc} PERO marker presente. Posible rc spurio del "
-            f"wrapper .cmd en Windows. Aceptando el resultado."
-        )
-        return True
+        # Caso Windows-típico (rc spurio =1): marker pero rc!=0
+        if marker_present and not rc_ok:
+            logger.warn(
+                f"@{agent} rc={rc} PERO marker presente. Posible rc spurio del "
+                f"wrapper .cmd en Windows. Aceptando el resultado."
+            )
+            return True
 
-    # rc==0 pero el agente no escribió el marker → Bug P12 (codifica/output
-    # truncado, modelo que ignora la instrucción). El orquestador inyecta.
-    if rc_ok and not marker_present:
-        logger.warn(f"@{agent} rc=0 pero sin marker. Inyectando marker por orquestador (P12 fix).")
-        inject_done_marker(agent, project_path, logger)
-        return True
+        # rc==0 pero sin marker → Bug P12
+        if rc_ok and not marker_present:
+            logger.warn(f"@{agent} rc=0 pero sin marker. Inyectando marker por orquestador (P12 fix).")
+            inject_done_marker(agent, project_path, logger)
+            return True
 
-    # rc!=0 AND marker no presente → reintento limpio
-    logger.warn(f"@{agent} rc={rc} y marker ausente → reintento limpio.")
-    rc2 = run_agent(agent, project_path, objective, logger, invoke_as=invoke_as)
-    marker2 = agent_done(agent, project_path)
-    if rc2 == 0 and marker2:
-        logger.info(f"@{agent} OK en reintento.")
-        return True
-    if marker2 and rc2 != 0:
-        # rc spurio del reintento pero marker presente
-        logger.warn(f"@{agent} reintento rc={rc2} pero marker presente. Aceptando.")
-        return True
-    if rc2 == 0 and not marker2:
-        logger.warn(f"@{agent} reintento rc=0 sin marker → inyectando por orquestador.")
-        inject_done_marker(agent, project_path, logger)
-        return True
-    # Ambas fallaron
-    logger.error(agent, f"Reintento también falló (rc={rc2}, marker="
-                        f"{'sí' if marker2 else 'no'}).")
-    return False
+        # rc!=0 AND marker ausente → reintento limpio
+        logger.warn(f"@{agent} rc={rc} y marker ausente → reintento limpio.")
+        rc2 = run_agent(agent, project_path, objective, logger, invoke_as=invoke_as)
+        marker2 = agent_done(agent, project_path)
+        if rc2 == 0 and marker2:
+            logger.info(f"@{agent} OK en reintento.")
+            return True
+        logger.warn(f"@{agent} reintento también sin marker → se considera fallido.")
+        return False
+    finally:
+        if _pw_prev is not None:
+            set_project_mcp(project_path, "playwright", _pw_prev)
+            logger.info(f"[MCP] playwright restaurado a {_pw_prev} tras @{agent}")
 
 
 # ─── MCP MINIMAL (ahorro de tokens por request) ───────────────────────────────
@@ -1348,6 +1345,30 @@ def apply_mcp_minimal(project_path: str, logger: PipelineLogger) -> None:
            f"{len(preserved)} conservados tal cual (decisiones del proyecto): {preserved}")
     logger.info(f"{msg} — {proj_cfg_path}")
     print(msg)
+
+
+def set_project_mcp(project_path: str, name: str, enabled: bool) -> bool:
+    """Habilita/deshabilita un MCP en <proyecto>/.opencode/opencode.json.
+    Retorna el estado PREVIO (bool) para poder restaurarlo. Si el proyecto no
+    tiene opencode.json, no hace nada (retorna None)."""
+    proj_cfg_path = os.path.join(project_path, ".opencode", "opencode.json")
+    if not os.path.exists(proj_cfg_path):
+        return None
+    try:
+        with open(proj_cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception:
+        return None
+    mcp = cfg.setdefault("mcp", {})
+    entry = mcp.get(name)
+    prev = bool(entry.get("enabled", False)) if isinstance(entry, dict) else False
+    if isinstance(entry, dict):
+        entry["enabled"] = enabled
+    elif enabled:
+        mcp[name] = {"enabled": True}
+    with open(proj_cfg_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+    return prev
 
 
 # ─── VISUAL DIFF ESTRUCTURAL (mejora #1 — maqueta→producto, Opción B) ─────────
