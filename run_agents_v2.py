@@ -77,6 +77,18 @@ from pathlib import Path
 import yaml
 from dotenv import load_dotenv
 
+# ─── SDD BUILDER PROPIO (sdd/) ────────────────────────────────────────────────
+# Módulo mínimo que reemplaza al MCP @juanklagos/sdd-mcp: gate (aprobada/consentida)
+# + rubric (score) + lectura de specs. El gate-check en run() hace el LOCK:
+# el pipeline NO implementa sobre una spec no aprobada y consentida.
+# Design: C:\WorkSpace\pipeline-ui\DESIGN.md
+try:
+    from sdd import gate as sdd_gate
+    from sdd import rubric as sdd_rubric
+    from sdd import spec_format as sdd_spec_format
+except Exception:  # módulo ausente → el gate-check se desactiva con aviso
+    sdd_gate = sdd_rubric = sdd_spec_format = None
+
 # ─── CARGA DE .env (config por entorno) ──────────────────────────────────────
 # Carga las variables del archivo `.env` ubicado JUNTO a este script (la raíz
 # del repo). Permite sobrescribir configuración sin tocar el código:
@@ -285,6 +297,7 @@ PHASE_EXIT_CODES = {
     "tester":      4,
     "debugger":    5,
     "sdd-updater": 6,
+    "gate":        10,  # LOCK: spec no aprobada/consentida (gate-check)
 }
 STATUS_FILE = "pipeline-status.json"
 
@@ -1336,6 +1349,17 @@ def apply_mcp_minimal(project_path: str, logger: PipelineLogger) -> None:
 
 
 # ─── FLUJO PRINCIPAL ───────────────────────────────────────────────────────────
+def _detect_spec_num(objective: str) -> str:
+    """Extrae el número de spec del objetivo (p.ej. 'Especificación 002 - ...').
+    Usado por el gate-check para saber qué spec corre el pipeline. Devuelve '' si
+    no parece una spec (objetivo libre → gate-check se omite)."""
+    import re
+    if not objective:
+        return ""
+    m = re.search(r"(?:Especificaci[oó]n|spec)\s+(\d{1,3})", objective, re.I)
+    return m.group(1) if m else ""
+
+
 def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger = None,
         mcp_minimal: bool = False, no_mcp_minimal: bool = False,
         budget: int = DEFAULT_CONTEXT_BUDGET_TOKENS):
@@ -1363,9 +1387,40 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
     # 0b. Prompt de borrado (excepto --resume)
     handle_opencode_context(abs_path, resume=resume, logger=logger)
 
-    # Detectar stack una sola vez
+    # Detect stack una sola vez
     stack = detect_stack(abs_path)
     logger.info(f"Stack inicial: {stack}")
+
+    # ─── SDD BUILDER PROPIO: GATE-CHECK (LOCK sin consentimiento) ─────────────
+    # Si el objetivo es una spec del proyecto y el módulo sdd está presente,
+    # el pipeline NO arranca si la spec no está aprobada Y consentida.
+    # Esto acopla gate y pipeline (mejora #1 de la evaluación E2E).
+    gate_check = None
+    if sdd_spec_format is not None:
+        try:
+            # Busca la spec en el objetivo (p.ej. "Especificación 002 - ...")
+            gate_spec = sdd_spec_format.resolve_spec_by_input(abs_path, _detect_spec_num(objective))
+            if gate_spec:
+                stt = sdd_gate.get_spec_state(abs_path, gate_spec["id"])
+                logger.info(f"[GATE] spec={gate_spec['id']} verdict={stt['verdict']} "
+                            f"aprobada={stt['aprobada']} consentida={stt['consentida']}")
+                if stt["locked"]:
+                    reason = []
+                    if not stt["aprobada"]:
+                        reason.append("spec NO aprobada")
+                    if not stt["consentida"]:
+                        reason.append("sin consentimiento de implementacion")
+                    msg = ("[LOCK] No se implementa sobre spec no autorizada: " + " + ".join(reason)
+                           + f". Spec {gate_spec['id']}.")
+                    print(f"\n{'='*60}\n  {msg}\n  Corre antes: `pipeline spec approve {gate_spec['id']}` y "
+                          f"`pipeline spec consent {gate_spec['id']}`\n{'='*60}\n")
+                    logger.error("gate", msg)
+                    _write_status(abs_path, last_step="", status="blocked",
+                                  failed="gate", log_path=logger.log_path)
+                    sys.exit(PHASE_EXIT_CODES.get("gate", 10))
+                gate_check = stt
+        except Exception as e:
+            print(f"  [WARN] gate-check omitido por error: {e}")
 
     # MCP minimal: deshabilitar MCP globales para este proyecto (ahorro de tokens).
     # Automático en la primera corrida (proyecto sin .opencode/opencode.json);
@@ -1657,7 +1712,11 @@ def _print_cli_help() -> None:
     print("  --profile <perfil>          rápido | equilibrado | minucioso (F4)")
     print("  --mcp-minimal               Deshabilita tools MCP globales")
     print("  --no-mcp-minimal            Conserva los tools MCP globales")
-    print("Subcomandos: run, resume, status, cost.")
+    print("Subcomandos: run, resume, status, cost, spec <verb>.")
+    print("  spec score <proyecto> [spec]   score de la(s) spec(s)")
+    print("  spec approve <proyecto> <spec> aprueba una spec (firma humana)")
+    print("  spec consent <proyecto> <spec> consiente implementación (abre el gate)")
+    print("  spec status <proyecto>         estado del gate (aprobada/consentida/locked)")
 
 
 def _run_read_subcommand(cmd: str, rest: list[str]) -> None:
@@ -1675,6 +1734,72 @@ def _run_read_subcommand(cmd: str, rest: list[str]) -> None:
         cmd_cost(project_path)
 
 
+def _run_spec_subcommand(rest: list[str]) -> None:
+    """`pipeline spec <verb> <proyecto> [spec]` — builder propio (sdd/).
+
+    Verbs: score | approve | consent | status. Gate está en spec/.sdd/gate.json
+    (versionado). Sin MCP juanklagos; usa el módulo sdd/ local al pipeline.
+    """
+    if not rest:
+        print("  [ERROR] uso: pipeline spec <score|approve|consent|status> <proyecto> [spec]")
+        sys.exit(2)
+    verb = rest[0]
+    args = rest[1:]
+    if len(args) < 1:
+        print(f"  [ERROR] falta la ruta del proyecto: pipeline spec {verb} <proyecto>")
+        sys.exit(2)
+    project_path = os.path.abspath(args[0])
+    if not os.path.exists(project_path):
+        print(f"  [ERROR] La ruta no existe: {project_path}")
+        sys.exit(1)
+
+    if verb == "score":
+        # score de todas las specs, o de una espec
+        target = args[1] if len(args) > 1 else None
+        if target:
+            spec = sdd_spec_format.resolve_spec_by_input(project_path, target)
+            if not spec:
+                print(f"  [ERROR] spec no encontrada: {target}")
+                sys.exit(1)
+            r = sdd_rubric.score_spec_dir(spec["dir"])
+            print(f"  {spec['id']}: score={r['score']} grade={r['grade']}")
+            for n in r["notes"]:
+                print(f"    - {n}")
+        else:
+            for s in sdd_rubric.score_project(project_path):
+                print(f"  {s['specId']}: score={s['score']} grade={s['grade']} notes={s['notes'] or '[]'}")
+        return
+
+    if verb in ("approve", "consent"):
+        if len(args) < 2:
+            print(f"  [ERROR] falta el id de la spec: pipeline spec {verb} <proyecto> <spec>")
+            sys.exit(2)
+        spec = sdd_spec_format.resolve_spec_by_input(project_path, args[1])
+        if not spec:
+            print(f"  [ERROR] spec no encontrada: {args[1]}")
+            sys.exit(1)
+        if verb == "approve":
+            sdd_gate.approve(project_path, spec["id"])
+        else:
+            sdd_gate.consent(project_path, spec["id"])
+        stt = sdd_gate.get_spec_state(project_path, spec["id"])
+        print(f"  ✓ {verb} → spec {spec['id']}: aprobada={stt['aprobada']} consentida={stt['consentida']} "
+              f"verdict={stt['verdict']}")
+        return
+
+    if verb == "status":
+        g = sdd_gate.gate_summary(project_path)
+        print(f"  Gate: {g['verdict']} · {g['approvedSpecs']}/{g['totalSpecs']} aprobadas · "
+              f"{g['consentedSpecs']} consentidas · errores={g['errors']}")
+        for s in g["specs"]:
+            print(f"    {s['specId']}: score={s.get('score')} grade={s.get('grade')} | "
+                  f"aprobada={s['aprobada']} consentida={s['consentida']} → {s['verdict']}")
+        return
+
+    print(f"  [ERROR] verb spec desconocido: {verb!r} (score|approve|consent|status)")
+    sys.exit(2)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Punto de entrada del CLI. `argv` permite inyección para tests; si es
     None, usa sys.argv[1:]. Dispatch por subcomandos (F3): status/cost → por
@@ -1688,6 +1813,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(0 if argv and argv[0] in ("help", "-h", "--help") else 2)
 
     first = argv[0]
+    if first == "spec":
+        _run_spec_subcommand(argv[1:])
+        return
     if first in ("status", "cost"):
         _run_read_subcommand(first, argv[1:])
         return
