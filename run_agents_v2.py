@@ -1540,6 +1540,34 @@ def run(project_path: str, objective: str, resume: bool, logger: PipelineLogger 
                                   failed="gate", log_path=logger.log_path)
                     sys.exit(PHASE_EXIT_CODES.get("gate", 10))
                 gate_check = stt
+                # ── GATE POR SCORE (rediseño rubrica: score honesto) ─────────────
+                # Aunque la spec esté aprobada y consentida, si su score de SUSTANCIA
+                # es < 85 (meta A), NO se implementa: fuerza a detallar la spec antes
+                # de gastar tokens de agentes. Misma filosofía que el LOCK de consent.
+                if sdd_rubric is not None:
+                    try:
+                        sc = sdd_rubric.score_spec_dir(gate_spec["dir"])
+                        if sc["score"] < 85:
+                            msg = (
+                                f"[GATE/SCORE] spec {gate_spec['id']} score={sc['score']} "
+                                f"({sc['grade']}) < meta 85. No se implementa sobre una spec "
+                                f"incompleta (evita quemar tokens en basura)."
+                            )
+                            print("=" * 60)
+                            print(f"  {msg}")
+                            print("  Deudas técnicas que corregir en la spec:")
+                            for n in (sc["notes"] or ["(sin notas — revisar contenido)"]):
+                                print(f"    - {n}")
+                            print(f"  Corre después de arreglarla: `pipeline spec score "
+                                  f"{Path(abs_path)}/spec/specs/{gate_spec['id']}`")
+                            print("=" * 60)
+                            logger.error("gate/score", msg)
+                            _write_status(abs_path, last_step="", status="blocked",
+                                          failed="gate/score", log_path=logger.log_path)
+                            sys.exit(PHASE_EXIT_CODES.get("gate", 10))
+                        logger.info(f"[GATE/SCORE] spec={gate_spec['id']} score={sc['score']} OK (>=85)")
+                    except Exception as esc:
+                        logger.warn(f"[GATE/SCORE] no se pudo puntuar ({esc}) — se omite el score-check.")
         except Exception as e:
             print(f"  [WARN] gate-check omitido por error: {e}")
 

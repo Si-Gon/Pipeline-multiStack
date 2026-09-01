@@ -26,7 +26,7 @@ def test_write_status_fallido(tmp_project):
 def test_phase_exit_codes_mapeo_completo():
     assert R.PHASE_EXIT_CODES == {
         "explorer": 2, "coder": 3, "tester": 4,
-        "debugger": 5, "sdd-updater": 6,
+        "debugger": 5, "sdd-updater": 6, "gate": 10,  # gate-check LOCK (mejora #1)
     }
     # códigos únicos (ninguna fase comparte exit code)
     assert len(set(R.PHASE_EXIT_CODES.values())) == len(R.PHASE_EXIT_CODES)
