@@ -6,7 +6,7 @@ El gate es la firma humana del SDD. Dos actos:
 
 LOCK: el pipeline `run` corre solo si ambas son True para la spec objetivo.
 Si falta alguna → gate 'blocked' → el pipeline NO lanza el coder (mejora #1 de
-la evaluación E2E: convertir el gate independiente de juanklagos en cadena acoplada).
+la evaluación E2E: convertir el gate independiente del builder externo previo en cadena acoplada).
 
 Estado en un JSON versionado: <proyecto>/spec/.sdd/gate.json
 """

@@ -78,7 +78,7 @@ import yaml
 from dotenv import load_dotenv
 
 # ─── SDD BUILDER PROPIO (sdd/) ────────────────────────────────────────────────
-# Módulo mínimo que reemplaza al MCP @juanklagos/sdd-mcp: gate (aprobada/consentida)
+# Módulo mínimo que reemplaza al MCP externo previo del SDD (framework ajeno): gate (aprobada/consentida)
 # + rubric (score) + lectura de specs. El gate-check en run() hace el LOCK:
 # el pipeline NO implementa sobre una spec no aprobada y consentida.
 # Design: C:\WorkSpace\pipeline-ui\DESIGN.md
@@ -1950,7 +1950,7 @@ def _run_spec_subcommand(rest: list[str]) -> None:
     """`pipeline spec <verb> <proyecto> [spec]` — builder propio (sdd/).
 
     Verbs: score | approve | consent | status. Gate está en spec/.sdd/gate.json
-    (versionado). Sin MCP juanklagos; usa el módulo sdd/ local al pipeline.
+    (versionado). Sin MCP externo; usa el módulo sdd/ local al pipeline.
     """
     if not rest:
         print("  [ERROR] uso: pipeline spec <score|approve|consent|status> <proyecto> [spec]")
