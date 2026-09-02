@@ -1,5 +1,14 @@
 # multi-agent-pipeline
 
+# multi-agent-pipeline — el motor es **StructoEngine**
+
+> **StructoEngine** (del latín *structo*, "yo construyo, yo estructuro" + *engine*) es el
+> nombre del **motor de ejecución** de OrigoBuild: la pieza que estructura la corrida de agentes
+> (Explorer → Coder → Tester → Debugger → SDD-Updater) con control de tokens y verificación real.
+> OrigoBuild es el ecosistema (spec → pipeline → SDD); StructoEngine es su motor. Nombre de
+> equipo, adoptado 2026-08-30; sin autor al frente. Ver `pipeline-ui/CONVERSION.md`.
+
+
 Orquestación multi-agente con **control de tokens y factura estimada**, sin la
 caja negra de los asistentes de pago por suscripción.
 
@@ -117,14 +126,16 @@ git** (quién lo hizo y cuándo), y nada depende de un proceso externo corriendo
 ### Componentes del módulo `sdd/`
 
 * **`sdd/gate.py`** — lee/escribe `gate.json`: estado `aprobada`/`consentida` + `locked`.
-* **`sdd/rubric.py`** — score determinista de la spec (max 89, port de `sdd-spec-scoring`;
-paridad verificada: 89/A).
+* **`sdd/rubric.py`** — **score HONESTO de sustancia (2026-08-30)**: la plantilla SOLA queda
+  ~61/C (penaliza placeholders, exige objetivo accionable + aceptación EARS/Gherkin + requisitos
+  con cuerpo + ref real + tasks con tests); meta 85=A solo con contenido real. Con **GATE/SCORE**:
+  `run` aborta exit 10 si la spec aprobada+consentida puntúa <85. Detalle: skill `sdd-spec-scoring`.
 * **`sdd/spec\\\_format.py`** — lectura mínima de `spec/specs/NNN-slug/` (sin templates de scaffolding).
 
 ### CLI del gate
 
 ```bash
-pipeline spec new     /ruta/a/mi-proyecto "Nombre spec"   # crea spec (5 archivos, score 89/A de arranque)
+pipeline spec new     /ruta/a/mi-proyecto "Nombre spec"   # crea spec (5 archivos, ~61/C; rellenar para subir a 85/A)
 pipeline spec status  /ruta/a/mi-proyecto          # verdict (open/blocked) + por spec
 pipeline spec score   /ruta/a/mi-proyecto \\\[spec]   # score por spec (o todas)
 pipeline spec approve /ruta/a/mi-proyecto 2        # firma humana: aprueba la spec
